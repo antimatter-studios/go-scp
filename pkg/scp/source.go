@@ -18,6 +18,9 @@ type SendOptions struct {
 	// Preserve sends each entry's modification time ahead of it, as "scp -p -f"
 	// does. Set it only when the peer asked for -p.
 	Preserve bool
+
+	// Progress, when set, is told how each file's body moves.
+	Progress Progress
 }
 
 // SendFS serves the sending end of a transfer, as "scp -f" does, for the named
@@ -79,7 +82,7 @@ func sendEntry(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, opts Sen
 	case info.IsDir() && opts.Recursive:
 		return sendDir(r, out, fsys, name, h, opts)
 	case info.Mode().IsRegular():
-		return sendFile(r, out, fsys, name, h)
+		return sendFile(sender{r: r, out: out, progress: opts.Progress}, fsys, name, h)
 	default:
 		return report(out, name, errNotRegular)
 	}
@@ -139,29 +142,31 @@ func entryAnswer(err error) (failure, fatal error) {
 	return nil, err
 }
 
-func sendFile(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header) (failure, err error) {
+func sendFile(s sender, fsys fs.FS, name string, h Header) (failure, err error) {
 	file, openErr := fsys.Open(name)
 	if openErr != nil {
-		return report(out, name, openErr)
+		return report(s.out, name, openErr)
 	}
 	defer file.Close()
-	return sender{r, out}.file(h, file, name)
+	return s.file(h, file, name)
 }
 
-// sender speaks the sending side of a transfer to a receiver: r reads its answers
-// and out takes what is sent.
+// sender speaks the sending side of a transfer to a receiver: r reads its answers,
+// out takes what is sent, and progress, when set, is told how each body moves.
 type sender struct {
-	r   *bufio.Reader
-	out io.Writer
+	r        *bufio.Reader
+	out      io.Writer
+	progress Progress
 }
 
 // file sends one file: its time line when h carries times, its control line, and
 // h.Size bytes of body, waiting for the receiver's answer after each. When the body
 // ends early the promised size is made up with zeros and the file is reported
 // failed, so the receiver neither hangs nor keeps a short file as whole; label
-// names the file in that report. It returns the file's own failure, which the
-// transfer survives, separately from an error that ends it.
+// names the file in that report and to progress. It returns the file's own
+// failure, which the transfer survives, separately from an error that ends it.
 func (s sender) file(h Header, body io.Reader, label string) (failure, err error) {
+	body = s.progress.track(label, h.Size, body)
 	if err := sendTimes(s.r, s.out, h); err != nil {
 		return entryAnswer(err)
 	}

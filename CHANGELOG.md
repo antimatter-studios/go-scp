@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `Client.Progress`, and `Progress` in `SendOptions` and `ReceiveOptions`, is
+  told as each file of a transfer starts and as its bytes move, for single
+  files, trees and copies between hosts alike.
 - `Serve` answers one scp command for an SSH server under an `os.Root`,
   confined to it through symlinks, and `NewDirSinkIn` opens a `DirSink` for a
   path inside a root. The server example, the package example and the README

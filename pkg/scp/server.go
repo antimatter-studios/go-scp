@@ -30,7 +30,7 @@ func (r *Rejection) Unwrap() error { return r.Err }
 // is called. Times the sender preserved ("scp -p") arrive in the header's ModTime
 // and AccessTime; applying them is accept's business. Directories are refused.
 func Receive(in io.Reader, out io.Writer, maxSize int64, accept func(Header, io.Reader) error) error {
-	return (&oneFile{take: accept}).receive(bufio.NewReader(in), out, maxSize)
+	return (&oneFile{take: accept}).receive(bufio.NewReader(in), out, ReceiveOptions{MaxSize: maxSize})
 }
 
 // failureMessage is what the peer is told about err.
@@ -56,7 +56,7 @@ func Send(in io.Reader, out io.Writer, h Header, body io.Reader) error {
 	if err := readStatus(r); err != nil {
 		return err
 	}
-	failure, err := sender{r, out}.file(h, body, h.Name)
+	failure, err := sender{r: r, out: out}.file(h, body, h.Name)
 	if err != nil {
 		return err
 	}

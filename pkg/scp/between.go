@@ -68,7 +68,7 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 			pace := newLimiter(src.Limit)
 			in, back = limitedReader{r: fetch.stdout, l: pace}, limitedWriter{w: fetch.stdin, l: pace}
 		}
-		opts := ReceiveOptions{MaxSize: src.MaxSize, Recursive: src.Recursive}
+		opts := ReceiveOptions{MaxSize: src.MaxSize, Recursive: src.Recursive, Progress: src.Progress}
 		return receiveEntries(bufio.NewReader(in), back, opts, toStore, src.nameCheck(sources))
 	}()
 
@@ -97,7 +97,7 @@ type forwardSink struct {
 // File sends one file. The receiving end may turn it down at its control line;
 // the file's body is then left for the caller to drain.
 func (f forwardSink) File(h Header, body io.Reader) error {
-	failure, err := sender{f.r, f.w}.file(h, body, h.Name)
+	failure, err := sender{r: f.r, out: f.w}.file(h, body, h.Name)
 	if err != nil {
 		return err
 	}

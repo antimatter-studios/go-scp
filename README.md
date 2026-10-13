@@ -202,8 +202,9 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | SFTP or the classic protocol, whichever the host offers | ✅ Supported | `sftp.Auto` (not an `scp` option) | [sftp](examples/sftp/main.go) |
 | `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression, and adding it there waits on partial flush in `compress/flate` ([golang/go#31514](https://github.com/golang/go/issues/31514)) | |
 
-Progress reporting needs no option: transfers stream through `io.Reader` and
-`io.Writer`, so wrap the one you pass to count bytes.
+Progress needs no `scp` option: set `Client.Progress` and it is told as each
+file of every transfer starts and as its bytes move, with the file's path in the
+transfer and its size. See [progress](examples/progress/main.go).
 
 ### Connection options
 

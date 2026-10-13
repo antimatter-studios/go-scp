@@ -56,6 +56,10 @@ type Client struct {
 	// Limit of n*1000/8.
 	Limit int64
 
+	// Progress, when set, is told how each file of every transfer moves: as it
+	// starts and as its bytes go, with its path in the transfer and its size.
+	Progress Progress
+
 	// ForwardAgent asks every session for agent forwarding, as "scp -A" does, so
 	// that the host CopyOnHost runs scp on can log in to the other host with the
 	// caller's keys. Register the agent on the connection first, once, with
@@ -108,7 +112,7 @@ func (c *Client) Download(ctx context.Context, remotePath string, w io.Writer) (
 		return err
 	}}
 	err := c.run(ctx, c.command("-f", Quote(remotePath)), func(r *bufio.Reader, out io.Writer) error {
-		return file.receive(r, out, c.MaxSize)
+		return file.receive(r, out, ReceiveOptions{MaxSize: c.MaxSize, Progress: c.Progress})
 	})
 	return file.h, err
 }
@@ -142,7 +146,7 @@ func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body i
 		if err := readStatus(r); err != nil {
 			return err
 		}
-		failure, err := sender{r, out}.file(h, body, remotePath)
+		failure, err := sender{r: r, out: out, progress: c.Progress}.file(h, body, remotePath)
 		if err != nil {
 			return err
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 )
 
@@ -33,6 +34,9 @@ type ReceiveOptions struct {
 	// Recursive accepts directories, as "scp -r -t" does. Without it a
 	// directory ends the transfer.
 	Recursive bool
+
+	// Progress, when set, is told how each file's body moves.
+	Progress Progress
 
 	// single ends the transfer after its first file, as Receive and Download
 	// expect one file and return as soon as it is in.
@@ -84,8 +88,8 @@ type receiving struct {
 	sink  Sink
 	check nameCheck
 
-	times    Header // from a time line, waiting for the entry it goes with
-	depth    int    // directories entered and not yet left
+	times    Header   // from a time line, waiting for the entry it goes with
+	dirs     []string // names of the directories entered and not yet left
 	failures []error
 }
 
@@ -119,7 +123,7 @@ func (rc *receiving) refuse(message string, err error) error {
 
 // end is the transfer's result once the sender has closed its side.
 func (rc *receiving) end() error {
-	if rc.depth != 0 {
+	if len(rc.dirs) != 0 {
 		return fmt.Errorf("%w: the sender stopped inside a directory", ErrProtocol)
 	}
 	return errors.Join(rc.failures...)
@@ -153,7 +157,7 @@ func (rc *receiving) entry(line, malformed string) (Header, error) {
 	}
 	h.ModTime, h.AccessTime = rc.times.ModTime, rc.times.AccessTime
 	rc.times = Header{}
-	if err := checkName(h.Name, rc.depth, rc.check); err != nil {
+	if err := checkName(h.Name, len(rc.dirs), rc.check); err != nil {
 		return Header{}, rc.refuse(err.Error(), err)
 	}
 	return h, nil
@@ -171,7 +175,7 @@ func (rc *receiving) file(line string) (done bool, err error) {
 		}
 		rc.failures = append(rc.failures, fmt.Errorf("scp: %q declares %d bytes, more than the %d accepted", h.Name, h.Size, rc.opts.MaxSize))
 	} else {
-		failure, err := receiveBody(rc.r, rc.out, h, rc.sink)
+		failure, err := rc.body(h)
 		if err != nil {
 			return true, err
 		}
@@ -196,29 +200,31 @@ func (rc *receiving) enterDir(line string) error {
 	if err := rc.sink.EnterDir(h); err != nil {
 		return rc.refuse(failureMessage(err), err)
 	}
-	rc.depth++
+	rc.dirs = append(rc.dirs, h.Name)
 	return writeOK(rc.out)
 }
 
 func (rc *receiving) leaveDir() error {
-	if rc.depth == 0 {
+	if len(rc.dirs) == 0 {
 		return rc.refuse("end of a directory that was never started", fmt.Errorf("%w: unmatched end of directory", ErrProtocol))
 	}
-	rc.depth--
+	rc.dirs = rc.dirs[:len(rc.dirs)-1]
 	if err := rc.sink.LeaveDir(); err != nil {
 		return rc.refuse(failureMessage(err), err)
 	}
 	return writeOK(rc.out)
 }
 
-// receiveBody takes one file's body after its control line. It returns the file's
-// own failure, which the transfer survives, separately from an error that ends it.
-func receiveBody(r *bufio.Reader, out io.Writer, h Header, sink Sink) (failure, err error) {
+// body takes one file's body after its control line. It returns the file's own
+// failure, which the transfer survives, separately from an error that ends it.
+func (rc *receiving) body(h Header) (failure, err error) {
+	r, out := rc.r, rc.out
 	if err := writeOK(out); err != nil {
 		return nil, err
 	}
 	body := io.LimitReader(r, h.Size)
-	fileErr := sink.File(h, body)
+	name := path.Join(path.Join(rc.dirs...), h.Name)
+	fileErr := rc.sink.File(h, rc.opts.Progress.track(name, h.Size, body))
 	if _, err := io.Copy(io.Discard, body); err != nil {
 		return nil, fmt.Errorf("%w: reading the body of %q: %w", ErrProtocol, h.Name, err)
 	}
@@ -268,10 +274,11 @@ func (s *oneFile) File(h Header, body io.Reader) error {
 	return s.take(h, body)
 }
 
-// receive takes the one file the sender sends, refusing it when it declares more
-// than maxSize bytes, and returns as soon as it is in.
-func (s *oneFile) receive(r *bufio.Reader, out io.Writer, maxSize int64) error {
-	err := receiveEntries(r, out, ReceiveOptions{MaxSize: maxSize, single: true}, s, nil)
+// receive takes the one file the sender sends, as opts allow, and returns as soon
+// as it is in.
+func (s *oneFile) receive(r *bufio.Reader, out io.Writer, opts ReceiveOptions) error {
+	opts.single = true
+	err := receiveEntries(r, out, opts, s, nil)
 	if err == nil && !s.got {
 		err = fmt.Errorf("%w: the sender ended without sending a file", ErrProtocol)
 	}

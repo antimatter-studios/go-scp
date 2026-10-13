@@ -50,6 +50,11 @@ mkdir -p "$work/restored"
 "$bin/copy-tree" "${a[@]}" -dir "$work/project" -remote "$home" -back "$work/restored"
 diff -r "$work/project" "$work/restored/project"
 
+step progress
+"$bin/progress" "${a[@]}" -dir "$work/project" -remote "$home" | tee "$work/progress.out"
+grep -q '^project/src/main.go: starting, 13 bytes$' "$work/progress.out"
+grep -q '^project/src/main.go: done$' "$work/progress.out"
+
 step wildcards
 "$bin/copy-tree" "${a[@]}" -dir "$work/logs" -remote "$home" -back "$work/restored"
 mkdir -p "$work/matches"
