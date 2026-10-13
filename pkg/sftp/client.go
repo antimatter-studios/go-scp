@@ -1,0 +1,129 @@
+// Package sftp copies files to and from a remote host over SFTP, as OpenSSH's
+// "scp -s" does, in the same shape as package scp's Client: CopyTo and CopyFrom,
+// with Recursive, Preserve and Glob.
+//
+// SFTP reaches hosts that the classic scp protocol cannot: a host that offers only
+// the SFTP subsystem, with no shell and no scp program. Auto picks whichever of the
+// two protocols a host offers.
+//
+// This package lives in a module of its own, so a program that uses only package
+// scp does not depend on github.com/pkg/sftp, which this package is built on.
+package sftp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"sync"
+
+	pkgsftp "github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
+)
+
+// Client copies files over SFTP. Each transfer opens its own SFTP session, so one
+// Client serves any number of them.
+type Client struct {
+	// session starts an SFTP session for one transfer, and returns it with the
+	// function that ends it. A field so tests can give the client a server of
+	// their own.
+	session func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error)
+
+	// Recursive lets CopyTo and CopyFrom copy directories with their contents, as
+	// "scp -r" does.
+	Recursive bool
+
+	// Preserve keeps modification times and modes, as "scp -p" does.
+	Preserve bool
+
+	// Glob lets the remote sources given to CopyFrom hold wildcards (*, ? and
+	// [...]), matched on the remote host as scp's remote paths are.
+	Glob bool
+
+	// Requests caps how many requests may be in flight for one file, as
+	// "-X nrequests=n" does; 0 leaves github.com/pkg/sftp's default.
+	Requests int
+
+	// BufferSize is the most one request carries, as "-X buffer=n" does; 0 leaves
+	// the default of 32768 bytes, the size every server must accept. A larger size
+	// works only with a server that allows it.
+	BufferSize int
+}
+
+// ErrUnavailable is returned, wrapped, when an SFTP session cannot be started: the
+// host offers no SFTP subsystem, or the program given to NewProgramClient did not
+// start or did not speak SFTP. Auto falls back to the classic protocol on it.
+var ErrUnavailable = errors.New("sftp: no SFTP session")
+
+// NewClient returns a Client that copies over conn, through the host's SFTP
+// subsystem. Verifying the host's key is conn's business, settled when it was
+// dialled.
+func NewClient(conn *ssh.Client) *Client {
+	return &Client{session: func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
+		c, err := pkgsftp.NewClient(conn, opts...)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, c.Close, nil
+	}}
+}
+
+// NewProgramClient returns a Client that, for each transfer, runs an SFTP server
+// program on this host and speaks SFTP over its standard input and output, as
+// "scp -D program" does. There is no SSH connection, so the "remote" files are
+// local ones, seen through the program.
+func NewProgramClient(program string, args ...string) *Client {
+	return &Client{session: func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
+		cmd := exec.Command(program, args...)
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, nil, err
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			return nil, nil, err
+		}
+		c, err := pkgsftp.NewClientPipe(stdout, stdin, opts...)
+		if err != nil {
+			stdin.Close()
+			cmd.Wait()
+			return nil, nil, err
+		}
+		return c, func() error {
+			c.Close()
+			return cmd.Wait()
+		}, nil
+	}}
+}
+
+// with starts an SFTP session, runs f on it, and ends it. Cancelling ctx ends the
+// session, which ends f; the error is then ctx's.
+func (c *Client) with(ctx context.Context, f func(*pkgsftp.Client) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var opts []pkgsftp.ClientOption
+	if c.Requests > 0 {
+		opts = append(opts, pkgsftp.MaxConcurrentRequestsPerFile(c.Requests))
+	}
+	if c.BufferSize > 0 {
+		opts = append(opts, pkgsftp.MaxPacketUnchecked(c.BufferSize))
+	}
+	client, end, err := c.session(opts...)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	var once sync.Once
+	endSession := func() { once.Do(func() { end() }) }
+	stop := context.AfterFunc(ctx, endSession)
+	err = f(client)
+	stop()
+	endSession()
+	if ctxErr := ctx.Err(); err != nil && ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
