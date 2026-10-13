@@ -139,3 +139,40 @@ func TestReceiveAllLeavesNoPaddedFileWhenTheSenderStops(t *testing.T) {
 		t.Errorf("big: %v, size %d; want only the 9 bytes that arrived", statErr, info.Size())
 	}
 }
+
+func TestDirSinkCannotEnterADirectoryItCannotOpen(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens any directory")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	sink := newDirSink(t, dir, DirSinkOptions{})
+
+	if err := sink.EnterDir(Header{Mode: 0o755, Name: "locked"}); err == nil {
+		t.Error("entering a directory that cannot be opened: want an error")
+	}
+}
+
+func TestDirSinkCloseReleasesDirectoriesStillOpen(t *testing.T) {
+	sink, err := NewDirSink(t.TempDir(), DirSinkOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.EnterDir(Header{Mode: 0o755, Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.EnterDir(Header{Mode: 0o755, Name: "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sink.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	if len(sink.dirs) != 0 {
+		t.Errorf("%d directories still held", len(sink.dirs))
+	}
+}
