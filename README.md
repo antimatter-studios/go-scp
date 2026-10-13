@@ -223,6 +223,9 @@ Three layers, all run by CI:
   a real login shell, so quoting, wildcards and `sudo scp` are tested as they
   run in production.
 
+CI also fails unless the tests cover every statement in `pkg/`
+(`scripts/coverage-gate.sh`), naming whatever they miss.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

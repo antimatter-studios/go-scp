@@ -39,9 +39,10 @@ jobs:
           set -euo pipefail
           command -v scp
           go test -race -count=1 ./...
+      # Every statement in pkg/ must be covered; the step names whatever is not.
+      - name: Coverage
+        run: scripts/coverage-gate.sh
 
-  # The one required check: it stands for every job above, and fails when any of
-  # them failed, was cancelled or was skipped.
   # The library against real SSH hosts: two sshd containers on one network,
   # started and stopped by scripts/integration.sh. Every remote command goes
   # through a real login shell.
@@ -68,6 +69,8 @@ jobs:
       - name: Examples
         run: scripts/examples.sh
 
+  # The one required check: it stands for every job above, and fails when any of
+  # them failed, was cancelled or was skipped.
   ci-ok:
     if: always()
     needs: [test, integration, examples]
