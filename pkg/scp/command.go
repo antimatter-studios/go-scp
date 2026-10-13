@@ -177,9 +177,6 @@ func splitWords(cmd string) (words []string, patterns []bool, err error) {
 		case strings.IndexByte(shellOperators, ch) >= 0:
 			return nil, nil, fmt.Errorf("scp: %q is more than a plain scp command", cmd)
 		case ch == '~' && !inWord && startsLoginDirectory(cmd, i):
-			// An unquoted ~ that starts a word is the login directory, which is
-			// where an scp session starts, so ~/x is x and ~ is ".", as the shell
-			// would have it. OpenSSH's scp client sends such paths unquoted.
 			inWord = true
 			if i+1 < len(cmd) && cmd[i+1] == '/' {
 				i++
@@ -202,8 +199,10 @@ func wordEndsAt(cmd string, i int) bool {
 	return i == len(cmd) || strings.IndexByte(wordSeparators, cmd[i]) >= 0
 }
 
-// startsLoginDirectory reports whether the ~ at cmd[i] stands alone or starts a
-// path, rather than being the start of a name such as ~user.
+// startsLoginDirectory reports whether the unquoted ~ at cmd[i] stands alone or
+// starts a path, rather than starting a name such as ~user. Such a ~ is the login
+// directory, which is where an scp session starts, so ~/x reads as x and ~ as ".",
+// as the shell would have it; OpenSSH's scp client sends such paths unquoted.
 func startsLoginDirectory(cmd string, i int) bool {
 	return wordEndsAt(cmd, i+1) || cmd[i+1] == '/'
 }
