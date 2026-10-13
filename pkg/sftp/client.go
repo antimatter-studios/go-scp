@@ -60,11 +60,32 @@ var ErrUnavailable = errors.New("sftp: no SFTP session")
 // dialled.
 func NewClient(conn *ssh.Client) *Client {
 	return &Client{session: func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
-		c, err := pkgsftp.NewClient(conn, opts...)
+		// The session is opened here rather than by github.com/pkg/sftp's
+		// NewClient, which leaves it open when the host refuses the subsystem;
+		// Auto would leak one on every fall back.
+		s, err := conn.NewSession()
 		if err != nil {
 			return nil, nil, err
 		}
-		return c, c.Close, nil
+		// The pipes fail only once the session has started, which it has not.
+		stdin, inErr := s.StdinPipe()
+		stdout, outErr := s.StdoutPipe()
+		err = errors.Join(inErr, outErr)
+		if err == nil {
+			err = s.RequestSubsystem("sftp")
+		}
+		var c *pkgsftp.Client
+		if err == nil {
+			c, err = pkgsftp.NewClientPipe(stdout, stdin, opts...)
+		}
+		if err != nil {
+			s.Close()
+			return nil, nil, err
+		}
+		return c, func() error {
+			c.Close()
+			return s.Close()
+		}, nil
 	}}
 }
 
