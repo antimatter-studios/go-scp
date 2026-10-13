@@ -29,7 +29,8 @@ func (r *Rejection) Unwrap() error { return r.Err }
 // treats success as permission to discard its copy therefore keeps it.
 //
 // maxSize, when positive, refuses a file that declares more bytes, before accept
-// is called. Timestamp lines are acknowledged and ignored; directories are refused.
+// is called. Times the sender preserved ("scp -p") arrive in the header's ModTime
+// and AccessTime; applying them is accept's business. Directories are refused.
 func Receive(in io.Reader, out io.Writer, maxSize int64, accept func(Header, io.Reader) error) error {
 	r := bufio.NewReader(in)
 
@@ -83,10 +84,11 @@ func Receive(in io.Reader, out io.Writer, maxSize int64, accept func(Header, io.
 	return writeOK(out)
 }
 
-// receiveHeader reads up to the file's control line, acknowledging timestamp lines
-// on the way. On failure it also returns the message to send the peer, or "" when
-// the peer reported the failure itself and expects no answer.
+// receiveHeader reads up to the file's control line, keeping the times from a time
+// line on the way. On failure it also returns the message to send the peer, or ""
+// when the peer reported the failure itself and expects no answer.
 func receiveHeader(r *bufio.Reader, out io.Writer) (Header, string, error) {
+	var times Header
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -99,6 +101,9 @@ func receiveHeader(r *bufio.Reader, out io.Writer) (Header, string, error) {
 
 		switch line[0] {
 		case 'T':
+			if err := parseTimes(line, &times); err != nil {
+				return Header{}, "malformed time line", err
+			}
 			if err := writeOK(out); err != nil {
 				return Header{}, "", err
 			}
@@ -107,6 +112,7 @@ func receiveHeader(r *bufio.Reader, out io.Writer) (Header, string, error) {
 			if err != nil {
 				return Header{}, "malformed control line", err
 			}
+			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
 			return h, "", nil
 		case 'D', 'E':
 			return Header{}, "directories are not supported", fmt.Errorf("%w: directories are not supported", ErrProtocol)
@@ -129,7 +135,8 @@ func failureMessage(err error) string {
 
 // Send serves the sending end of a transfer, as "scp -f" does: the peer fetches the
 // one file described by h, whose h.Size bytes are read from body. in and out are
-// the session's stdin and stdout.
+// the session's stdin and stdout. When h carries times they are sent ahead of the
+// file, as "scp -p -f" does; leave them zero unless the peer asked for -p.
 func Send(in io.Reader, out io.Writer, h Header, body io.Reader) error {
 	if err := validName(h.Name); err != nil {
 		return err
@@ -139,6 +146,14 @@ func Send(in io.Reader, out io.Writer, h Header, body io.Reader) error {
 	// The peer says it is ready.
 	if err := readStatus(r); err != nil {
 		return err
+	}
+	if h.hasTimes() {
+		if _, err := io.WriteString(out, h.timesLine()+"\n"); err != nil {
+			return err
+		}
+		if err := readStatus(r); err != nil {
+			return err
+		}
 	}
 	if _, err := io.WriteString(out, h.String()+"\n"); err != nil {
 		return err

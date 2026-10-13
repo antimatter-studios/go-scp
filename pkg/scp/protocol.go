@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Status bytes. Every step of a transfer is answered with one of these, and the two
@@ -41,6 +42,51 @@ type Header struct {
 	// Name is the file's name, without a directory. A received name comes from the
 	// peer: treat it as untrusted, never as a path.
 	Name string
+	// ModTime and AccessTime are the file's times. They travel in a time line
+	// ("T<mtime> <usec> <atime> <usec>") ahead of the control line, which the sender
+	// writes only when times are preserved ("scp -p"); zero when none was sent.
+	ModTime    time.Time
+	AccessTime time.Time
+}
+
+// hasTimes reports whether h carries times to send.
+func (h Header) hasTimes() bool {
+	return !h.ModTime.IsZero() || !h.AccessTime.IsZero()
+}
+
+// timesLine returns h's time line, without its newline. A missing time is sent as
+// the other one, so the receiver never sets a file to the epoch.
+func (h Header) timesLine() string {
+	mtime, atime := h.ModTime, h.AccessTime
+	if mtime.IsZero() {
+		mtime = atime
+	}
+	if atime.IsZero() {
+		atime = mtime
+	}
+	return fmt.Sprintf("T%d %d %d %d", mtime.Unix(), mtime.Nanosecond()/1000, atime.Unix(), atime.Nanosecond()/1000)
+}
+
+// parseTimes reads a time line, without its newline, into h's times.
+func parseTimes(line string, h *Header) error {
+	if !strings.HasPrefix(line, "T") {
+		return fmt.Errorf("%w: %q is not a time line", ErrProtocol, line)
+	}
+	fields := strings.Split(line[1:], " ")
+	if len(fields) != 4 {
+		return fmt.Errorf("%w: malformed time line %q", ErrProtocol, line)
+	}
+	var n [4]int64
+	for i, f := range fields {
+		v, err := strconv.ParseInt(f, 10, 64)
+		if err != nil || v < 0 || (i%2 == 1 && v > 999999) {
+			return fmt.Errorf("%w: malformed time line %q", ErrProtocol, line)
+		}
+		n[i] = v
+	}
+	h.ModTime = time.Unix(n[0], n[1]*1000)
+	h.AccessTime = time.Unix(n[2], n[3]*1000)
+	return nil
 }
 
 // String returns h as a control line, without its newline.

@@ -55,3 +55,41 @@ jobs:
             echo "test: $RESULT" >&2
             exit 1
           fi
+
+  # Publishes the coverage figure for the README badge: a shields.io endpoint file
+  # on the badges branch, rewritten on every push to main. Not part of ci-ok, so a
+  # badge that fails to publish never blocks a merge.
+  coverage-badge:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache: true
+      - name: Measure coverage
+        id: cov
+        run: echo "percent=$(scripts/coverage.sh "$RUNNER_TEMP/coverage.out")" >> "$GITHUB_OUTPUT"
+      - name: Publish the badge
+        env:
+          PERCENT: ${{ steps.cov.outputs.percent }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          color=red
+          for step in 50:orange 70:yellow 80:yellowgreen 90:green 100:brightgreen; do
+            if awk -v p="$PERCENT" -v t="${step%%:*}" 'BEGIN { exit !(p >= t) }'; then
+              color="${step#*:}"
+            fi
+          done
+          dir="$RUNNER_TEMP/badges"
+          git init -q -b badges "$dir"
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$PERCENT" "$color" > "$dir/coverage.json"
+          git -C "$dir" add coverage.json
+          git -C "$dir" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Coverage ${PERCENT}%"
+          git -C "$dir" push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
