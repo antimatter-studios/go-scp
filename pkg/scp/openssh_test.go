@@ -52,16 +52,24 @@ func openSSHServer(scp string) handler {
 			args = append(args, p)
 		}
 		run := exec.Command(scp, args...)
-		run.Stdin, run.Stdout, run.Stderr = stdin, stdout, stderr
-		err = run.Run()
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode()
-		}
+		run.Stdout, run.Stderr = stdout, stderr
+		// sshd ends the session when scp exits. Copying the session into scp's
+		// stdin in a goroutine of our own keeps Wait from waiting on it: that copy
+		// only returns once the client closes its side, and a client fetching
+		// several files waits for this side to close first.
+		in, err := run.StdinPipe()
 		if err != nil {
 			return 127
 		}
-		return 0
+		go func() {
+			io.Copy(in, stdin)
+			in.Close()
+		}()
+		if err := run.Run(); run.ProcessState == nil {
+			io.WriteString(stderr, err.Error()+"\n")
+			return 127
+		}
+		return run.ProcessState.ExitCode()
 	}
 }
 
@@ -71,7 +79,7 @@ func TestClientAgainstOpenSSHScp(t *testing.T) {
 
 	t.Run("write then read", func(t *testing.T) {
 		name := filepath.Join(dir, "notes.txt")
-		content := []byte("line one\n\x00binary\xff'quoted' $(not run)\n")
+		content := []byte("line one\n\x00binary\xff'quoted' $HOME\n")
 		if err := c.WriteFile(t.Context(), name, content, 0o640); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
