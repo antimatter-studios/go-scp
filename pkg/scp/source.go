@@ -72,7 +72,7 @@ func sendEntry(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, opts Sen
 	}
 	h := Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: path.Base(name)}
 	if opts.Preserve {
-		h.ModTime, h.AccessTime = info.ModTime(), info.ModTime()
+		h.ModTime, h.AccessTime = info.ModTime(), AccessTime(info)
 	}
 	if err := validName(h.Name); err != nil {
 		return report(out, name, err)

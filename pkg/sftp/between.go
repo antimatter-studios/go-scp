@@ -77,7 +77,7 @@ func (s *remoteSink) place(name string) string {
 }
 
 func (s *remoteSink) File(h scp.Header, body io.Reader) error {
-	return s.w.writeFile(s.place(h.Name), h.Mode, h.ModTime, h.Size, body)
+	return s.w.writeFile(s.place(h.Name), h, body)
 }
 
 func (s *remoteSink) EnterDir(h scp.Header) error {
@@ -93,5 +93,5 @@ func (s *remoteSink) EnterDir(h scp.Header) error {
 func (s *remoteSink) LeaveDir() error {
 	d := s.dirs[len(s.dirs)-1]
 	s.dirs = s.dirs[:len(s.dirs)-1]
-	return s.w.closeDir(d.path, d.h.Mode, d.h.ModTime, d.created)
+	return s.w.closeDir(d.path, d.h, d.created)
 }

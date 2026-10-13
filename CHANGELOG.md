@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- With -p the access time sent is the file's own, read from its stat on Linux
+  and macOS, rather than its modification time; `AccessTime` returns it, and
+  SFTP copies carry it both ways.
 - `Client.Progress`, and `Progress` in `SendOptions` and `ReceiveOptions`, is
   told as each file of a transfer starts and as its bytes move, for single
   files, trees and copies between hosts alike.

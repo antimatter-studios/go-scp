@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/antimatter-studios/go-scp/pkg/scp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -120,5 +121,33 @@ func TestIntegrationSFTPCopyBetweenHosts(t *testing.T) {
 	want := map[string]string{second + "/a": "A", second + "/sub/b": "B"}
 	if got := readTree(t, back); !reflect.DeepEqual(got, want) {
 		t.Errorf("copied back %v\nwant %v", got, want)
+	}
+}
+
+func TestIntegrationSFTPPreserveCarriesAccessTimes(t *testing.T) {
+	atime := time.Unix(1_610_000_000, 0) // 2021
+	mtime := time.Unix(1_580_000_000, 0) // 2020
+	conn := dialTestHost(t, "GOSCP_HOST_A")
+	c := NewClient(conn)
+	c.Preserve = true
+	local, back := t.TempDir(), t.TempDir()
+	writeTree(t, local, map[string]string{"f": "x"})
+	if err := os.Chtimes(filepath.Join(local, "f"), atime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	remote := remoteName(t, conn)
+
+	if err := c.CopyTo(t.Context(), remote, filepath.Join(local, "f")); err != nil {
+		t.Fatalf("CopyTo: %v", err)
+	}
+	if err := c.CopyFrom(t.Context(), back, remote); err != nil {
+		t.Fatalf("CopyFrom: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(back, remote))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scp.AccessTime(info); !got.Equal(atime) || !info.ModTime().Equal(mtime) {
+		t.Errorf("times after a round trip: access %v, modified %v; want %v and %v", got, info.ModTime(), atime, mtime)
 	}
 }
