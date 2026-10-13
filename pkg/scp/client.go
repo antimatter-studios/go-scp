@@ -44,7 +44,7 @@ func NewClient(conn *ssh.Client) *Client {
 // Download copies the regular file at remotePath to w, and returns its header.
 func (c *Client) Download(ctx context.Context, remotePath string, w io.Writer) (Header, error) {
 	var h Header
-	err := c.run(ctx, "-f", remotePath, func(r *bufio.Reader, out io.Writer) error {
+	err := c.run(ctx, c.command("-f", Quote(remotePath)), func(r *bufio.Reader, out io.Writer) error {
 		// Ready for the file.
 		if err := writeOK(out); err != nil {
 			return err
@@ -134,7 +134,7 @@ func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body i
 	if err := validName(h.Name); err != nil {
 		return err
 	}
-	return c.run(ctx, "-t", remotePath, func(r *bufio.Reader, out io.Writer) error {
+	return c.run(ctx, c.command("-t", Quote(remotePath)), func(r *bufio.Reader, out io.Writer) error {
 		// The receiver is ready.
 		if err := readStatus(r); err != nil {
 			return err
@@ -170,13 +170,26 @@ func (c *Client) WriteFile(ctx context.Context, remotePath string, data []byte, 
 	return c.Upload(ctx, remotePath, Header{Mode: mode, Size: int64(len(data))}, bytes.NewReader(data))
 }
 
-// run starts scp on the remote host for remotePath and holds one exchange with it.
+// command returns the remote scp command line: the program, -p when preserving,
+// any extra flags, then the operands, already quoted.
+func (c *Client) command(flags string, operands ...string) string {
+	program := c.Program
+	if program == "" {
+		program = "scp"
+	}
+	if c.Preserve {
+		flags = "-p " + flags
+	}
+	return program + " " + flags + " " + strings.Join(operands, " ")
+}
+
+// run starts command on the remote host and holds one exchange with its scp.
 // When the exchange fails the session is closed at once, so a remote scp that is
 // still writing cannot leave the caller waiting; anything it wrote to stderr is
 // added to the error, which is usually where a missing scp explains itself.
 // Cancelling ctx closes the session, which ends the exchange; the error is then
 // ctx's.
-func (c *Client) run(ctx context.Context, flag, remotePath string, exchange func(*bufio.Reader, io.Writer) error) error {
+func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.Reader, io.Writer) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -209,14 +222,7 @@ func (c *Client) run(ctx context.Context, flag, remotePath string, exchange func
 		close(stderrDone)
 	}()
 
-	program := c.Program
-	if program == "" {
-		program = "scp"
-	}
-	if c.Preserve {
-		flag = "-p " + flag
-	}
-	if err := sess.Start(program + " " + flag + " " + Quote(remotePath)); err != nil {
+	if err := sess.Start(command); err != nil {
 		return err
 	}
 
