@@ -32,3 +32,8 @@ tasks:
     desc: Run the integration tests against two sshd containers (needs Docker)
     cmds:
       - scripts/integration.sh
+
+  examples:
+    desc: Run every example against two sshd containers (needs Docker)
+    cmds:
+      - scripts/examples.sh
