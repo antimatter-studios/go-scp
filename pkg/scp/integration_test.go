@@ -291,3 +291,21 @@ func TestIntegrationCopyOnHostForwardsTheAgent(t *testing.T) {
 		t.Errorf("host-b holds %q", got)
 	}
 }
+
+func TestIntegrationAPathThatStartsWithADash(t *testing.T) {
+	conn := dialHost(t, "GOSCP_HOST_A")
+	c := NewClient(conn)
+	suffix := make([]byte, 4)
+	rand.Read(suffix)
+	// Relative, so it lands in the login user's home and starts with the dash.
+	name := "-dash-" + hex.EncodeToString(suffix)
+	t.Cleanup(func() { runRemote(t, conn, "rm -f -- "+Quote(name)) })
+
+	if err := c.WriteFile(t.Context(), name, []byte("dash"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err := c.ReadFile(t.Context(), name)
+	if err != nil || string(got) != "dash" {
+		t.Fatalf("ReadFile = (%q, %v)", got, err)
+	}
+}

@@ -152,7 +152,7 @@ func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
 		}
 		switch kind {
 		case 'C':
-			line, err := r.ReadString('\n')
+			line, err := readLine(r)
 			if err != nil {
 				return Header{}, fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
 			}
@@ -160,7 +160,7 @@ func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
 			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
 			return h, err
 		case 'T':
-			line, err := r.ReadString('\n')
+			line, err := readLine(r)
 			if err != nil {
 				return Header{}, fmt.Errorf("%w: reading a time line: %v", ErrProtocol, err)
 			}
@@ -230,7 +230,10 @@ func (c *Client) WriteFile(ctx context.Context, remotePath string, data []byte, 
 }
 
 // command returns the remote scp command line: the program, -p when preserving,
-// any extra flags, then the operands, already quoted.
+// any extra flags, then -- and the operands, already quoted. Quoting keeps the
+// remote shell from splitting a path, but once the shell has removed the quotes
+// scp's option parser would take a path such as -r for an option; -- ends the
+// options first.
 func (c *Client) command(flags string, operands ...string) string {
 	program := c.Program
 	if program == "" {
@@ -239,7 +242,7 @@ func (c *Client) command(flags string, operands ...string) string {
 	if c.Preserve {
 		flags = "-p " + flags
 	}
-	return program + " " + flags + " " + strings.Join(operands, " ")
+	return program + " " + flags + " -- " + strings.Join(operands, " ")
 }
 
 // run starts command on the remote host and holds one exchange with its scp.

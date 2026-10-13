@@ -26,16 +26,22 @@ type DirSinkOptions struct {
 // arrive, and every write goes through an os.Root, which refuses a path that would
 // leave it, through a symlink or otherwise.
 type DirSink struct {
-	root  *os.Root
-	first string // the target's own name when it is not a directory; "" when it is
-	used  bool   // whether the target's own name has been taken
+	root  *os.Root // the target, or the directory holding it when it is not a directory
+	first string   // the target's own name when it is not a directory; "" when it is
+	used  bool     // whether the target's own name has been taken
 	opts  DirSinkOptions
-	dirs  []openDir
+	dirs  []openDir // the directories entered and not yet left, innermost last
 }
 
+// openDir is a directory entered and not yet left. It is held open as a root of its
+// own, so its entries are created by name in it rather than by a path from the
+// target that grows with every level, and would cost more at every level.
 type openDir struct {
-	rel string
-	h   Header
+	root   *os.Root // the directory itself
+	parent *os.Root // the directory holding it
+	name   string   // its name in parent
+	rel    string   // its path under the target
+	h      Header
 }
 
 // NewDirSink returns a DirSink writing under target. Close it when done.
@@ -55,72 +61,107 @@ func NewDirSink(target string, opts DirSinkOptions) (*DirSink, error) {
 	return s, nil
 }
 
-// Close releases the target directory.
-func (s *DirSink) Close() error { return s.root.Close() }
+// Close releases the target directory, and any directory entered and not left.
+func (s *DirSink) Close() error {
+	for _, d := range s.dirs {
+		d.root.Close()
+	}
+	s.dirs = nil
+	return s.root.Close()
+}
 
-// rel returns where an entry named name goes, relative to the root.
-func (s *DirSink) rel(name string) (string, error) {
+// maxPath is the longest path a DirSink writes under its target, the PATH_MAX of
+// Linux. OpenSSH's scp stops at the system's limit because it builds whole paths;
+// an os.Root has no such limit, so without one a sender could nest directories
+// without end, each one held open.
+const maxPath = 4096
+
+// place is where an entry goes: the root it is created in, its name there, and its
+// path under the target.
+type place struct {
+	root *os.Root
+	name string
+	rel  string
+}
+
+// placeOf returns where an entry named name goes.
+func (s *DirSink) placeOf(name string) (place, error) {
 	if len(s.dirs) > 0 {
-		return path.Join(s.dirs[len(s.dirs)-1].rel, name), nil
+		d := s.dirs[len(s.dirs)-1]
+		rel := path.Join(d.rel, name)
+		if len(rel) > maxPath {
+			return place{}, fmt.Errorf("scp: a path under the target longer than %d bytes", maxPath)
+		}
+		return place{d.root, name, rel}, nil
 	}
 	if s.first == "" {
-		return name, nil
+		return place{s.root, name, name}, nil
 	}
 	if s.used {
-		return "", fmt.Errorf("scp: %s is not a directory, so it takes only one entry", s.first)
+		return place{}, fmt.Errorf("scp: %s is not a directory, so it takes only one entry", s.first)
 	}
 	s.used = true
-	return s.first, nil
+	return place{s.root, s.first, s.first}, nil
 }
 
 // File writes one file the way scp does: in place over an existing file, then cut
-// to the new length, so an existing file keeps its owner.
+// to the new length, so an existing file keeps its owner. It writes at most h.Size
+// bytes, and a body that ends sooner fails the file, which keeps only what arrived.
 func (s *DirSink) File(h Header, body io.Reader) error {
-	rel, err := s.rel(h.Name)
+	if h.Size < 0 {
+		return fmt.Errorf("scp: %s: negative size %d", h.Name, h.Size)
+	}
+	at, err := s.placeOf(h.Name)
 	if err != nil {
 		return err
 	}
-	file, err := s.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE, h.Mode)
+	file, err := at.root.OpenFile(at.name, os.O_WRONLY|os.O_CREATE, h.Mode)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	if _, err := io.Copy(file, body); err != nil {
-		return err
+	n, err := io.CopyN(file, body, h.Size)
+	if err == io.EOF {
+		err = fmt.Errorf("scp: %s: only %d of %d bytes arrived", at.rel, n, h.Size)
 	}
-	if err := file.Truncate(h.Size); err != nil {
-		return err
+	// Cut an existing longer file down to what was written, and never pad a short
+	// one out to the size it was meant to have.
+	if truncErr := file.Truncate(n); err == nil {
+		err = truncErr
 	}
-	if !s.opts.Preserve {
-		return nil
+	if err != nil || !s.opts.Preserve {
+		return err
 	}
 	// Times are set only once the mode is, as scp does.
 	err = file.Chmod(h.Mode)
 	if err == nil {
-		err = s.applyTimes(rel, h)
+		err = applyTimes(at.root, at.name, h)
 	}
 	return err
 }
 
 // EnterDir creates the directory unless it exists, writable by its owner until it
-// is left so that its entries can be created.
+// is left so that its entries can be created, and opens it for them.
 func (s *DirSink) EnterDir(h Header) error {
-	rel, err := s.rel(h.Name)
+	at, err := s.placeOf(h.Name)
 	if err != nil {
 		return err
 	}
-	info, err := s.root.Stat(rel)
+	info, err := at.root.Stat(at.name)
 	switch {
 	case err == nil && !info.IsDir():
-		return fmt.Errorf("scp: %s: not a directory", rel)
+		return fmt.Errorf("scp: %s: not a directory", at.rel)
 	case errors.Is(err, fs.ErrNotExist):
-		if err := s.root.Mkdir(rel, h.Mode|0o700); err != nil {
-			return err
-		}
-	case err != nil:
+		err = at.root.Mkdir(at.name, h.Mode|0o700)
+	}
+	if err != nil {
 		return err
 	}
-	s.dirs = append(s.dirs, openDir{rel: rel, h: h})
+	dir, err := at.root.OpenRoot(at.name)
+	if err != nil {
+		return err
+	}
+	s.dirs = append(s.dirs, openDir{root: dir, parent: at.root, name: at.name, rel: at.rel, h: h})
 	return nil
 }
 
@@ -132,16 +173,18 @@ func (s *DirSink) LeaveDir() error {
 	}
 	d := s.dirs[len(s.dirs)-1]
 	s.dirs = s.dirs[:len(s.dirs)-1]
+	d.root.Close()
 	if !s.opts.Preserve {
 		return nil
 	}
-	if err := s.root.Chmod(d.rel, d.h.Mode); err != nil {
+	if err := d.parent.Chmod(d.name, d.h.Mode); err != nil {
 		return err
 	}
-	return s.applyTimes(d.rel, d.h)
+	return applyTimes(d.parent, d.name, d.h)
 }
 
-func (s *DirSink) applyTimes(rel string, h Header) error {
+// applyTimes sets the times h carries on name in root.
+func applyTimes(root *os.Root, name string, h Header) error {
 	if !h.hasTimes() {
 		return nil
 	}
@@ -152,5 +195,5 @@ func (s *DirSink) applyTimes(rel string, h Header) error {
 	if mtime.IsZero() {
 		mtime = atime
 	}
-	return s.root.Chtimes(rel, atime, mtime)
+	return root.Chtimes(name, atime, mtime)
 }

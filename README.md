@@ -211,11 +211,16 @@ it is dialled:
 
 ## Testing
 
-Three layers, all run by CI:
+Four layers, all run by CI:
 
 - **Unit tests** (`go test ./...`): both halves against each other over an
-  in-process SSH server, the wire format byte for byte, and fuzzing of the
-  control-line parser.
+  in-process SSH server, and the wire format byte for byte.
+- **Fuzzing** (`scripts/fuzz.sh`): every part that reads what the other end
+  sends, fed arbitrary input: both ends of a transfer, the client's download,
+  the command parser and the time and header lines. Each must finish, never
+  write outside its target and never write more than arrived. The seeds and
+  every input that once failed (`pkg/scp/testdata/fuzz`) run with the unit
+  tests; CI also fuzzes each target for a short while.
 - **OpenSSH interoperability**: the client against OpenSSH's `scp` as the remote
   end, and OpenSSH's `scp -O` client against the server half. Part of the unit
   tests; they run wherever `scp` is installed.
