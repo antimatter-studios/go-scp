@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // eachPair runs a test with two connected clients, a source and a destination,
@@ -76,5 +77,21 @@ func TestCopyBetweenNeedsSourcesAndALiveContext(t *testing.T) {
 	cancel()
 	if err := CopyBetween(ctx, src, []string{"/x"}, dst, t.TempDir()); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestCopyBetweenIsPacedByTheSourcesLimit(t *testing.T) {
+	src, dst := newTestServer(t, fileServer).dial(t), newTestServer(t, fileServer).dial(t)
+	src.Limit = 100_000
+	from := filepath.Join(t.TempDir(), "paced")
+	writeTree(t, filepath.Dir(from), map[string]string{"paced": strings.Repeat("0123456789", 4_000)})
+	start := time.Now()
+
+	if err := CopyBetween(t.Context(), src, []string{from}, dst, t.TempDir()); err != nil {
+		t.Fatalf("CopyBetween: %v", err)
+	}
+
+	if elapsed := time.Since(start); elapsed < 350*time.Millisecond || elapsed > 3*time.Second {
+		t.Errorf("40000 bytes at 100000/s took %v, want about 0.4s", elapsed)
 	}
 }

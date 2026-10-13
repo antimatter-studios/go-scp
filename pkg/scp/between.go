@@ -16,8 +16,8 @@ import (
 //
 // src's settings decide the transfer: Recursive copies directories, Preserve keeps
 // times and modes, Glob leaves wildcards in the sources for its shell, MaxSize
-// refuses a file that declares more bytes, and the same name check as CopyFrom
-// applies unless AnyNames is set. With more than one source, target must be an
+// refuses a file that declares more bytes, Limit paces the copy, and the same name
+// check as CopyFrom applies unless AnyNames is set. With more than one source, target must be an
 // existing directory on the second host.
 //
 // A file either side cannot handle is reported and skipped, and the copy carries
@@ -67,8 +67,16 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 		if err := readStatus(out.r); err != nil {
 			return err
 		}
+		var in io.Reader = fetch.stdout
+		var back io.Writer = fetch.stdin
+		if src.Limit > 0 {
+			// Every byte of the copy comes from the first host, so pacing that
+			// side paces the whole copy.
+			pace := newLimiter(src.Limit)
+			in, back = limitedReader{r: fetch.stdout, l: pace}, limitedWriter{w: fetch.stdin, l: pace}
+		}
 		opts := ReceiveOptions{MaxSize: src.MaxSize, Recursive: src.Recursive}
-		return receiveEntries(bufio.NewReader(fetch.stdout), fetch.stdin, opts, out, src.nameCheck(sources))
+		return receiveEntries(bufio.NewReader(in), back, opts, out, src.nameCheck(sources))
 	}()
 
 	// Both ends are done once their input closes.
