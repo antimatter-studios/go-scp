@@ -187,3 +187,12 @@ func TestAFailureWithNoStderrIsJustTheError(t *testing.T) {
 		t.Errorf("failure = %v", err)
 	}
 }
+
+func TestAFailureWithOnlyStderrIsTheStderr(t *testing.T) {
+	p := &proc{}
+	p.stderr.WriteString("scp: /x: No such file or directory\n")
+
+	if err := p.failure("copy", nil); err == nil || err.Error() != "scp: copy: scp: /x: No such file or directory" {
+		t.Errorf("failure = %v", err)
+	}
+}

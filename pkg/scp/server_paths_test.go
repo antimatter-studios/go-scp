@@ -89,7 +89,11 @@ func TestSendPaths(t *testing.T) {
 }
 
 func TestSendFailureNeedsThePeerReady(t *testing.T) {
-	if err := SendFailure(strings.NewReader(""), io.Discard, "gone"); !errors.Is(err, ErrProtocol) {
-		t.Errorf("SendFailure = %v, want ErrProtocol", err)
+	for name, in := range map[string]string{"no answer": "", "not a status byte": "\x05"} {
+		t.Run(name, func(t *testing.T) {
+			if err := SendFailure(strings.NewReader(in), io.Discard, "gone"); !errors.Is(err, ErrProtocol) {
+				t.Errorf("SendFailure = %v, want ErrProtocol", err)
+			}
+		})
 	}
 }
