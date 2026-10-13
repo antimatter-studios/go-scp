@@ -17,8 +17,8 @@ import (
 // src's settings decide the transfer: Recursive copies directories, Preserve keeps
 // times and modes, Glob leaves wildcards in the sources for its shell, MaxSize
 // refuses a file that declares more bytes, Limit paces the copy, and the same name
-// check as CopyFrom applies unless AnyNames is set. With more than one source, target must be an
-// existing directory on the second host.
+// check as CopyFrom applies unless AnyNames is set. With more than one source,
+// target must be an existing directory on the second host.
 //
 // A file either side cannot handle is reported and skipped, and the copy carries
 // on; the error lists every such failure in the words of the side that had it.
@@ -47,24 +47,24 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 	}
 	// The receiving end runs with the sending end's -p, so it expects the time
 	// lines it will be given.
-	sink := *dst
-	sink.Preserve = src.Preserve
+	storer := *dst
+	storer.Preserve = src.Preserve
 
 	fetch, err := src.start(ctx, src.command(fetchFlags, operands...))
 	if err != nil {
 		return fmt.Errorf("scp: starting the fetch: %w", err)
 	}
 	defer fetch.close()
-	store, err := sink.start(ctx, sink.command(storeFlags, Quote(target)))
+	store, err := storer.start(ctx, storer.command(storeFlags, Quote(target)))
 	if err != nil {
 		return fmt.Errorf("scp: starting the store: %w", err)
 	}
 	defer store.close()
 
 	copyErr := func() error {
-		out := forwardSink{r: bufio.NewReader(store.stdout), w: store.stdin}
+		toStore := forwardSink{r: bufio.NewReader(store.stdout), w: store.stdin}
 		// The receiving end says it is ready before anything is sent to it.
-		if err := readStatus(out.r); err != nil {
+		if err := readStatus(toStore.r); err != nil {
 			return err
 		}
 		var in io.Reader = fetch.stdout
@@ -76,7 +76,7 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 			in, back = limitedReader{r: fetch.stdout, l: pace}, limitedWriter{w: fetch.stdin, l: pace}
 		}
 		opts := ReceiveOptions{MaxSize: src.MaxSize, Recursive: src.Recursive}
-		return receiveEntries(bufio.NewReader(in), back, opts, out, src.nameCheck(sources))
+		return receiveEntries(bufio.NewReader(in), back, opts, toStore, src.nameCheck(sources))
 	}()
 
 	// Both ends are done once their input closes.
