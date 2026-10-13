@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/antimatter-studios/go-scp/pkg/scp"
 	pkgsftp "github.com/pkg/sftp"
@@ -87,7 +88,7 @@ func (cp *copying) putFile(local, remote string, info fs.FileInfo) error {
 		return fmt.Errorf("sftp: %w", err)
 	}
 	defer in.Close()
-	return cp.remote().writeFile(remote, info.Mode().Perm(), info.ModTime(), info.Size(), cp.pace.reader(in))
+	return cp.remote().writeFile(remote, localHeader(info), cp.pace.reader(in))
 }
 
 func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
@@ -106,10 +107,16 @@ func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
 			failures = append(failures, err)
 		}
 	}
-	if err := w.closeDir(remote, info.Mode().Perm(), info.ModTime(), created); err != nil {
+	if err := w.closeDir(remote, localHeader(info), created); err != nil {
 		failures = append(failures, err)
 	}
 	return errors.Join(failures...)
+}
+
+// localHeader describes a local file or directory as the remote end writes it:
+// its mode, size and times.
+func localHeader(info fs.FileInfo) scp.Header {
+	return scp.Header{Mode: info.Mode().Perm(), Size: info.Size(), ModTime: info.ModTime(), AccessTime: scp.AccessTime(info)}
 }
 
 // remote is the copy's session as the receiving end of the copy.
@@ -191,7 +198,10 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 	}
 	h := scp.Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: path.Base(remote)}
 	if cp.Preserve {
-		h.ModTime, h.AccessTime = info.ModTime(), info.ModTime()
+		// github.com/pkg/sftp's Stat always gives a *FileStat, with the access
+		// time the server sent along with the modification time.
+		h.ModTime = info.ModTime()
+		h.AccessTime = time.Unix(int64(info.Sys().(*pkgsftp.FileStat).Atime), 0)
 	}
 	if err := validName(h.Name); err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err), nil

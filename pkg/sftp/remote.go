@@ -6,8 +6,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"time"
 
+	"github.com/antimatter-studios/go-scp/pkg/scp"
 	pkgsftp "github.com/pkg/sftp"
 )
 
@@ -23,12 +23,13 @@ type remoteWriter struct {
 	preserve bool
 }
 
-// writeFile writes size bytes of body to path, in place over an existing file,
-// which keeps its own mode unless preserving. A new file takes mode, less 022 as a
-// server would take its umask off, before any of it is written: the server creates
-// it with a mode of its own choosing, which may let others read it. With preserve
-// the file takes mode and mtime exactly. A body that ends sooner fails the file.
-func (w remoteWriter) writeFile(path string, mode fs.FileMode, mtime time.Time, size int64, body io.Reader) error {
+// writeFile writes h.Size bytes of body to path, in place over an existing file,
+// which keeps its own mode unless preserving. A new file takes h.Mode, less 022 as
+// a server would take its umask off, before any of it is written: the server
+// creates it with a mode of its own choosing, which may let others read it. With
+// preserve the file takes h's mode and times exactly. A body that ends sooner fails
+// the file.
+func (w remoteWriter) writeFile(path string, h scp.Header, body io.Reader) error {
 	_, statErr := w.conn.Stat(path)
 	created := errors.Is(statErr, fs.ErrNotExist)
 	out, err := w.conn.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
@@ -37,25 +38,25 @@ func (w remoteWriter) writeFile(path string, mode fs.FileMode, mtime time.Time, 
 	}
 	switch {
 	case w.preserve:
-		err = out.Chmod(mode)
+		err = out.Chmod(h.Mode)
 	case created:
-		err = out.Chmod(mode &^ defaultUmask)
+		err = out.Chmod(h.Mode &^ defaultUmask)
 	}
 	if err == nil {
 		// Copied through plain Write calls: github.com/pkg/sftp's File.ReadFrom
 		// drops the error of a write that ends the file part-way through a packet,
 		// and reports the copy whole.
 		var n int64
-		n, err = io.CopyN(struct{ io.Writer }{out}, body, size)
+		n, err = io.CopyN(struct{ io.Writer }{out}, body, h.Size)
 		if err == io.EOF {
-			err = fmt.Errorf("only %d of %d bytes arrived", n, size)
+			err = fmt.Errorf("only %d of %d bytes arrived", n, h.Size)
 		}
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}
 	if err == nil && w.preserve {
-		err = w.conn.Chtimes(path, mtime, mtime)
+		err = w.conn.Chtimes(path, h.AccessTime, h.ModTime)
 	}
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", path, err)
@@ -80,19 +81,19 @@ func (w remoteWriter) openDir(path string) (created bool, err error) {
 	return created, nil
 }
 
-// closeDir gives a directory its mode, and with preserve its time, once its
+// closeDir gives a directory h's mode, and with preserve its times, once its
 // entries are in, so a directory without write permission still takes them. A
 // directory that already existed keeps its mode unless preserving.
-func (w remoteWriter) closeDir(path string, mode fs.FileMode, mtime time.Time, created bool) error {
+func (w remoteWriter) closeDir(path string, h scp.Header, created bool) error {
 	var err error
 	switch {
 	case w.preserve:
-		err = w.conn.Chmod(path, mode)
+		err = w.conn.Chmod(path, h.Mode)
 		if err == nil {
-			err = w.conn.Chtimes(path, mtime, mtime)
+			err = w.conn.Chtimes(path, h.AccessTime, h.ModTime)
 		}
 	case created:
-		err = w.conn.Chmod(path, mode&^defaultUmask)
+		err = w.conn.Chmod(path, h.Mode&^defaultUmask)
 	}
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", path, err)

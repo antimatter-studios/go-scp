@@ -35,7 +35,7 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 	if len(sources) > 1 {
 		flags = "-d " + flags // the remote refuses a target that is not a directory
 	}
-	opts := SendOptions{Recursive: c.Recursive, Preserve: c.Preserve}
+	opts := SendOptions{Recursive: c.Recursive, Preserve: c.Preserve, Progress: c.Progress}
 	return c.run(ctx, c.command(flags, Quote(target)), func(r *bufio.Reader, out io.Writer) error {
 		return sendEntries(r, out, items, opts)
 	})
@@ -70,7 +70,7 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 	if c.Recursive {
 		flags = "-r " + flags
 	}
-	opts := ReceiveOptions{MaxSize: c.MaxSize, Recursive: c.Recursive}
+	opts := ReceiveOptions{MaxSize: c.MaxSize, Recursive: c.Recursive, Progress: c.Progress}
 	check := c.nameCheck(sources)
 	return c.run(ctx, c.command(flags, operands...), func(r *bufio.Reader, out io.Writer) error {
 		return receiveEntries(r, out, opts, sink, check)
