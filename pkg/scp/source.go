@@ -65,14 +65,14 @@ func sendEntries(r *bufio.Reader, out io.Writer, sources []source, opts SendOpti
 func sendEntry(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, opts SendOptions) (failure, err error) {
 	info, statErr := fs.Stat(fsys, name)
 	if statErr != nil {
-		return report(out, fmt.Errorf("scp: %s: %w", name, statErr))
+		return report(out, name, statErr)
 	}
 	h := Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: path.Base(name)}
 	if opts.Preserve {
 		h.ModTime, h.AccessTime = info.ModTime(), info.ModTime()
 	}
 	if err := validName(h.Name); err != nil {
-		return report(out, err)
+		return report(out, name, err)
 	}
 
 	switch {
@@ -81,17 +81,34 @@ func sendEntry(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, opts Sen
 	case info.Mode().IsRegular():
 		return sendFile(r, out, fsys, name, h)
 	default:
-		return report(out, fmt.Errorf("scp: %s: not a regular file", name))
+		return report(out, name, errNotRegular)
 	}
 }
 
-// report tells the receiver an entry could not be sent, and returns that as the
-// entry's failure.
-func report(out io.Writer, failure error) (error, error) {
-	if err := writeFailure(out, failure.Error()); err != nil {
+// errNotRegular is why an entry that is neither a regular file nor, when recursive,
+// a directory is not sent.
+var errNotRegular = errors.New("not a regular file")
+
+// report tells the receiver an entry could not be sent, worded as OpenSSH's scp
+// words it, and returns that as the entry's failure.
+func report(out io.Writer, name string, cause error) (failure, err error) {
+	if err := writeFailure(out, "scp: "+name+": "+describe(cause)); err != nil {
 		return nil, err
 	}
-	return failure, nil
+	return fmt.Errorf("scp: %s: %w", name, cause), nil
+}
+
+// describe words an error the way the C library does, which is what scp prints and
+// what a peer's user will recognise.
+func describe(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "No such file or directory"
+	case errors.Is(err, fs.ErrPermission):
+		return "Permission denied"
+	default:
+		return err.Error()
+	}
 }
 
 // sendTimes sends h's time line when it carries times, and waits for it to be
@@ -116,7 +133,7 @@ func receiverRefused(err error) bool {
 func sendFile(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header) (failure, err error) {
 	file, openErr := fsys.Open(name)
 	if openErr != nil {
-		return report(out, fmt.Errorf("scp: %s: %w", name, openErr))
+		return report(out, name, openErr)
 	}
 	defer file.Close()
 
@@ -167,7 +184,7 @@ func sendFile(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header)
 func sendDir(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header, opts SendOptions) (failure, err error) {
 	entries, readErr := fs.ReadDir(fsys, name)
 	if readErr != nil {
-		return report(out, fmt.Errorf("scp: %s: %w", name, readErr))
+		return report(out, name, readErr)
 	}
 
 	if err := sendTimes(r, out, h); err != nil {
