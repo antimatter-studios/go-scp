@@ -30,14 +30,7 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 		return err
 	}
 
-	operands := make([]string, len(sources))
-	for i, s := range sources {
-		if src.Glob {
-			operands[i] = quotePattern(s)
-		} else {
-			operands[i] = Quote(s)
-		}
-	}
+	operands := src.remoteOperands(sources)
 	fetchFlags, storeFlags := "-f", "-t"
 	if src.Recursive {
 		fetchFlags, storeFlags = "-r "+fetchFlags, "-r "+storeFlags
