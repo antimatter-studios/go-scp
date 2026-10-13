@@ -22,3 +22,8 @@ tasks:
     desc: Fuzz the control-line parser for a minute
     cmds:
       - go test -run '^$' -fuzz FuzzParseHeader -fuzztime 60s ./pkg/scp
+
+  coverage:
+    desc: Run the tests with coverage and print the total
+    cmds:
+      - scripts/coverage.sh
