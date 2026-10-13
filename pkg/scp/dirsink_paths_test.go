@@ -1,6 +1,7 @@
 package scp
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,5 +93,49 @@ func TestDirSinkLeavingARemovedDirectoryFails(t *testing.T) {
 
 	if err := sink.LeaveDir(); err == nil {
 		t.Error("leaving a directory that is gone: want an error")
+	}
+}
+
+func TestDirSinkKeepsOnlyTheBytesThatArrived(t *testing.T) {
+	dir := t.TempDir()
+	// An existing longer file, to check it is cut down rather than kept or padded.
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("an older and longer file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sink := newDirSink(t, dir, DirSinkOptions{})
+
+	err := sink.File(Header{Mode: 0o644, Size: 1 << 30, Name: "a"}, strings.NewReader("short"))
+
+	if err == nil || !strings.Contains(err.Error(), "5 of 1073741824 bytes") {
+		t.Errorf("File = %v, want the short body reported", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "short" {
+		t.Errorf("file holds %q, want only the bytes that arrived", got)
+	}
+}
+
+func TestDirSinkWritesNoMoreThanTheDeclaredSize(t *testing.T) {
+	dir := t.TempDir()
+	sink := newDirSink(t, dir, DirSinkOptions{})
+
+	if err := sink.File(Header{Mode: 0o644, Size: 2, Name: "a"}, strings.NewReader("abcdef")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "ab" {
+		t.Errorf("file holds %q, want the declared 2 bytes", got)
+	}
+}
+
+func TestReceiveAllLeavesNoPaddedFileWhenTheSenderStops(t *testing.T) {
+	dir := t.TempDir()
+	sink := newDirSink(t, dir, DirSinkOptions{})
+
+	err := ReceiveAll(strings.NewReader("C0644 1000000 big\nonly this"), io.Discard, ReceiveOptions{}, sink)
+
+	if err == nil {
+		t.Fatal("ReceiveAll: want an error for the short body")
+	}
+	if info, statErr := os.Stat(filepath.Join(dir, "big")); statErr != nil || info.Size() != int64(len("only this")) {
+		t.Errorf("big: %v, size %d; want only the 9 bytes that arrived", statErr, info.Size())
 	}
 }

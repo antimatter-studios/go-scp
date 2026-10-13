@@ -74,8 +74,12 @@ func (s *DirSink) rel(name string) (string, error) {
 }
 
 // File writes one file the way scp does: in place over an existing file, then cut
-// to the new length, so an existing file keeps its owner.
+// to the new length, so an existing file keeps its owner. It writes at most h.Size
+// bytes, and a body that ends sooner fails the file, which keeps only what arrived.
 func (s *DirSink) File(h Header, body io.Reader) error {
+	if h.Size < 0 {
+		return fmt.Errorf("scp: %s: negative size %d", h.Name, h.Size)
+	}
 	rel, err := s.rel(h.Name)
 	if err != nil {
 		return err
@@ -85,14 +89,17 @@ func (s *DirSink) File(h Header, body io.Reader) error {
 		return err
 	}
 	defer file.Close()
-	if _, err := io.Copy(file, body); err != nil {
-		return err
+	n, err := io.CopyN(file, body, h.Size)
+	if err == io.EOF {
+		err = fmt.Errorf("scp: %s: only %d of %d bytes arrived", rel, n, h.Size)
 	}
-	if err := file.Truncate(h.Size); err != nil {
-		return err
+	// Cut an existing longer file down to what was written, and never pad a short
+	// one out to the size it was meant to have.
+	if truncErr := file.Truncate(n); err == nil {
+		err = truncErr
 	}
-	if !s.opts.Preserve {
-		return nil
+	if err != nil || !s.opts.Preserve {
+		return err
 	}
 	// Times are set only once the mode is, as scp does.
 	err = file.Chmod(h.Mode)
