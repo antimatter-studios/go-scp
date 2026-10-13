@@ -5,6 +5,8 @@
 - `sftp.Client.Limit` paces SFTP copies in bytes per second, as `scp -l` does.
 - `sftp.Client.MaxSize` refuses a remote file larger than it, as
   `scp.Client.MaxSize` does for classic downloads.
+- `sftp.CopyBetween` copies between two hosts through this program over SFTP,
+  as `scp -3` does.
 
 ## v0.6.0 — 2026-10-13
 

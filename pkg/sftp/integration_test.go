@@ -18,11 +18,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func dialTestHost(t *testing.T) *ssh.Client {
+// dialTestHost connects to the test host whose address is in the environment
+// variable addrEnv, GOSCP_HOST_A or GOSCP_HOST_B.
+func dialTestHost(t *testing.T, addrEnv string) *ssh.Client {
 	t.Helper()
-	addr, keyFile := os.Getenv("GOSCP_HOST_A"), os.Getenv("GOSCP_KEY")
+	addr, keyFile := os.Getenv(addrEnv), os.Getenv("GOSCP_KEY")
 	if addr == "" || keyFile == "" {
-		t.Fatal("GOSCP_HOST_A and GOSCP_KEY are not set: run the integration tests with scripts/integration.sh")
+		t.Fatalf("%s and GOSCP_KEY are not set: run the integration tests with scripts/integration.sh", addrEnv)
 	}
 	pem, err := os.ReadFile(keyFile)
 	if err != nil {
@@ -62,7 +64,7 @@ func remoteName(t *testing.T, conn *ssh.Client) string {
 }
 
 func TestIntegrationSFTPCopiesATreeBothWays(t *testing.T) {
-	conn := dialTestHost(t)
+	conn := dialTestHost(t, "GOSCP_HOST_A")
 	c := NewClient(conn)
 	c.Recursive, c.Preserve = true, true
 	local, back := t.TempDir(), t.TempDir()
@@ -86,7 +88,7 @@ func TestIntegrationSFTPCopiesATreeBothWays(t *testing.T) {
 }
 
 func TestIntegrationAutoUsesSFTPOnOpenSSH(t *testing.T) {
-	conn := dialTestHost(t)
+	conn := dialTestHost(t, "GOSCP_HOST_A")
 	a := NewAuto(conn)
 	// Make the classic client fail, so only a copy over SFTP can succeed.
 	a.SCP.Program = "false"
@@ -95,5 +97,28 @@ func TestIntegrationAutoUsesSFTPOnOpenSSH(t *testing.T) {
 
 	if err := a.CopyTo(t.Context(), remoteName(t, conn), filepath.Join(local, "a")); err != nil {
 		t.Fatalf("CopyTo: %v", err)
+	}
+}
+
+func TestIntegrationSFTPCopyBetweenHosts(t *testing.T) {
+	connA, connB := dialTestHost(t, "GOSCP_HOST_A"), dialTestHost(t, "GOSCP_HOST_B")
+	onA, onB := NewClient(connA), NewClient(connB)
+	onA.Recursive, onB.Recursive = true, true
+	local, back := t.TempDir(), t.TempDir()
+	writeTree(t, local, map[string]string{"d/a": "A", "d/sub/b": "B"})
+	first, second := remoteName(t, connA), remoteName(t, connB)
+
+	if err := onA.CopyTo(t.Context(), first, filepath.Join(local, "d")); err != nil {
+		t.Fatalf("CopyTo host-a: %v", err)
+	}
+	if err := CopyBetween(t.Context(), onA, []string{first}, onB, second); err != nil {
+		t.Fatalf("CopyBetween: %v", err)
+	}
+	if err := onB.CopyFrom(t.Context(), back, second); err != nil {
+		t.Fatalf("CopyFrom host-b: %v", err)
+	}
+	want := map[string]string{second + "/a": "A", second + "/sub/b": "B"}
+	if got := readTree(t, back); !reflect.DeepEqual(got, want) {
+		t.Errorf("copied back %v\nwant %v", got, want)
 	}
 }

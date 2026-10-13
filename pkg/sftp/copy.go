@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -88,36 +87,7 @@ func (cp *copying) putFile(local, remote string, info fs.FileInfo) error {
 		return fmt.Errorf("sftp: %w", err)
 	}
 	defer in.Close()
-	_, statErr := cp.conn.Stat(remote)
-	created := errors.Is(statErr, fs.ErrNotExist)
-	out, err := cp.conn.OpenFile(remote, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
-	if err != nil {
-		return fmt.Errorf("sftp: %s: %w", remote, err)
-	}
-	// The server creates a file with a mode of its own choosing, which may let
-	// others read it, so its mode is set before any of it is written.
-	switch {
-	case cp.Preserve:
-		err = out.Chmod(info.Mode().Perm())
-	case created:
-		err = out.Chmod(info.Mode().Perm() &^ 0o022)
-	}
-	if err == nil {
-		// Copied through plain Write calls: github.com/pkg/sftp's File.ReadFrom
-		// drops the error of a write that ends the file part-way through a packet,
-		// and reports the copy whole.
-		_, err = io.Copy(struct{ io.Writer }{out}, cp.pace.reader(in))
-	}
-	if closeErr := out.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil && cp.Preserve {
-		err = cp.conn.Chtimes(remote, info.ModTime(), info.ModTime())
-	}
-	if err != nil {
-		return fmt.Errorf("sftp: %s: %w", remote, err)
-	}
-	return nil
+	return cp.remote().writeFile(remote, info.Mode().Perm(), info.ModTime(), info.Size(), cp.pace.reader(in))
 }
 
 func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
@@ -125,40 +95,26 @@ func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
 	}
-	existing, err := cp.conn.Stat(remote)
-	created := errors.Is(err, fs.ErrNotExist)
-	switch {
-	case err == nil && !existing.IsDir():
-		return fmt.Errorf("sftp: %s: not a directory", remote)
-	case created:
-		err = cp.conn.Mkdir(remote)
-	}
+	w := cp.remote()
+	created, err := w.openDir(remote)
 	if err != nil {
-		return fmt.Errorf("sftp: %s: %w", remote, err)
+		return err
 	}
-
 	var failures []error
 	for _, e := range entries {
 		if err := cp.put(filepath.Join(local, e.Name()), path.Join(remote, e.Name())); err != nil {
 			failures = append(failures, err)
 		}
 	}
-
-	// The mode is set once the entries are in, so a directory without write
-	// permission still takes them.
-	switch {
-	case cp.Preserve:
-		err = cp.conn.Chmod(remote, info.Mode().Perm())
-		if err == nil {
-			err = cp.conn.Chtimes(remote, info.ModTime(), info.ModTime())
-		}
-	case created:
-		err = cp.conn.Chmod(remote, info.Mode().Perm()&^0o022)
-	}
-	if err != nil {
-		failures = append(failures, fmt.Errorf("sftp: %s: %w", remote, err))
+	if err := w.closeDir(remote, info.Mode().Perm(), info.ModTime(), created); err != nil {
+		failures = append(failures, err)
 	}
 	return errors.Join(failures...)
+}
+
+// remote is the copy's session as the receiving end of the copy.
+func (cp *copying) remote() remoteWriter {
+	return remoteWriter{conn: cp.conn, preserve: cp.Preserve}
 }
 
 // CopyFrom copies files from the remote host into target on this host, as
@@ -185,26 +141,30 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 	defer sink.Close()
 
 	return c.with(ctx, func(conn *pkgsftp.Client) error {
-		cp := c.copying(conn, sink)
-		var failures []error
-		for _, src := range sources {
-			names, err := cp.expand(remotePath(src))
+		return c.copying(conn, sink).fetchAll(sources)
+	})
+}
+
+// fetchAll copies every source, each expanded when Glob is set, into the sink.
+func (cp *copying) fetchAll(sources []string) error {
+	var failures []error
+	for _, src := range sources {
+		names, err := cp.expand(remotePath(src))
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		for _, name := range names {
+			failure, err := cp.fetch(name)
 			if err != nil {
-				failures = append(failures, err)
-				continue
+				return errors.Join(append(failures, err)...)
 			}
-			for _, name := range names {
-				failure, err := cp.fetch(name)
-				if err != nil {
-					return errors.Join(append(failures, err)...)
-				}
-				if failure != nil {
-					failures = append(failures, failure)
-				}
+			if failure != nil {
+				failures = append(failures, failure)
 			}
 		}
-		return errors.Join(failures...)
-	})
+	}
+	return errors.Join(failures...)
 }
 
 // expand returns the remote paths src names: itself or, with Glob, its matches.
