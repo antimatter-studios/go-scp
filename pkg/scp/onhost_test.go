@@ -19,7 +19,7 @@ func TestCopyOnHostRunsScpOnTheConnectedHost(t *testing.T) {
 	if err := c.CopyOnHost(t.Context(), "host-b:/srv/it's here", "/data/a b", "/data/c"); err != nil {
 		t.Fatalf("CopyOnHost: %v", err)
 	}
-	want := `scp -p -r -q '/data/a b' '/data/c' 'host-b:/srv/it'\''s here'`
+	want := `scp -p -r -q -- '/data/a b' '/data/c' 'host-b:/srv/it'\''s here'`
 	if got != want {
 		t.Errorf("command = %s\nwant      %s", got, want)
 	}
@@ -36,7 +36,7 @@ func TestCopyOnHostLeavesWildcardsForTheHostsShell(t *testing.T) {
 	if err := c.CopyOnHost(t.Context(), "host-b:/srv", "/data/*.log"); err != nil {
 		t.Fatalf("CopyOnHost: %v", err)
 	}
-	if got != `scp -q '/data/'*'.log' 'host-b:/srv'` {
+	if got != `scp -q -- '/data/'*'.log' 'host-b:/srv'` {
 		t.Errorf("command = %s", got)
 	}
 }

@@ -157,7 +157,7 @@ func TestProgramReplacesTheRemoteCommand(t *testing.T) {
 	if err := c.WriteFile(t.Context(), name, []byte("x"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if got != "/opt/bin/scp -t "+Quote(name) {
+	if got != "/opt/bin/scp -t -- "+Quote(name) {
 		t.Errorf("command = %q", got)
 	}
 }
