@@ -27,6 +27,26 @@ import "github.com/antimatter-studios/go-scp/pkg/scp"
 
 Its only dependency is `golang.org/x/crypto`.
 
+### SFTP
+
+Copying over SFTP, as `scp -s` does, is a module of its own, so a program that
+uses only `pkg/scp` does not depend on SFTP code:
+
+```
+go get github.com/antimatter-studios/go-scp/pkg/sftp
+```
+
+```go
+import "github.com/antimatter-studios/go-scp/pkg/sftp"
+```
+
+`sftp.Client` has the same `CopyTo` and `CopyFrom`, with `Recursive`, `Preserve`
+and `Glob`, and reaches hosts that offer only the SFTP subsystem, with no shell
+and no `scp` program. `sftp.Auto` uses SFTP when the host offers it and the
+classic protocol when it does not. It is built on
+[`github.com/pkg/sftp`](https://github.com/pkg/sftp) (BSD-2-Clause), and needs
+`golang.org/x/crypto` v0.54.0 or later.
+
 ## Client
 
 ```go
@@ -156,10 +176,11 @@ so the examples keep working as the library changes.
 
 ## Features
 
-The goal is everything OpenSSH's `scp` command does with the classic protocol.
-OpenSSH's own `scp` client now uses SFTP by default; `scp -O` still speaks the
-classic protocol, and every `scp` still answers it as the remote end. The tests
-run both halves against OpenSSH's `scp` wherever it is installed.
+The goal is everything OpenSSH's `scp` command does. OpenSSH's own `scp` client
+now uses SFTP by default; `scp -O` still speaks the classic protocol, and every
+`scp` still answers it as the remote end. `pkg/scp` is the classic protocol, and
+the tests run both of its halves against OpenSSH's `scp` wherever it is
+installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 
 ### Transfers
 
@@ -184,7 +205,10 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 | `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors | [between-hosts](examples/between-hosts/main.go) |
 | `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second | [on-host](examples/on-host/main.go) |
 | `-A` agent forwarding | ✅ Supported | `Client.ForwardAgent`, after `agent.ForwardToAgent` on the connection; lets `-R` reach the second host with your keys | [on-host](examples/on-host/main.go) |
-| `-s`, `-D`, `-X` SFTP mode | ❌ Not supported | this library is the classic protocol only | |
+| `-s` SFTP mode | ✅ Supported | `sftp.NewClient`, in the separate `pkg/sftp` module | [sftp](examples/sftp/main.go) |
+| `-D` a local SFTP server program | ✅ Supported | `sftp.NewProgramClient` | [sftp](examples/sftp/main.go) |
+| `-X` SFTP options | ✅ Supported | `sftp.Client.Requests` (`nrequests`), `sftp.Client.BufferSize` (`buffer`) | |
+| SFTP or the classic protocol, whichever the host offers | ✅ Supported | `sftp.Auto` (not an `scp` option) | [sftp](examples/sftp/main.go) |
 | `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression, and adding it there waits on partial flush in `compress/flate` ([golang/go#31514](https://github.com/golang/go/issues/31514)) | |
 
 Progress reporting needs no option: transfers stream through `io.Reader` and

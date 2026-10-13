@@ -14,6 +14,8 @@ bin="$work/bin"
 trap 'network_down; rm -rf "$work"' EXIT
 mkdir -p "$bin"
 go build -o "$bin/" ./examples/...
+# The SFTP example is a module of its own, as pkg/sftp is.
+(cd examples/sftp && go build -o "$bin/sftp" .)
 
 key="$KEYS_DIR/id_ed25519"
 a=(-addr "127.0.0.1:$HOST_A_PORT" -user tester -key "$key" -insecure)
@@ -89,6 +91,21 @@ ssh-agent sh -c 'ssh-add -q "$1" && shift && exec "$@"' _ "$key" \
 	"$bin/on-host" "${keyless[@]}" -forward-agent -from /home/keyless/notes.txt -to host-b:/tmp/agent.notes.txt
 "$bin/download" "${b[@]}" -from /tmp/agent.notes.txt -to "$work/agent.notes.txt"
 same "$work/notes.txt" "$work/agent.notes.txt"
+
+step sftp
+mkdir -p "$work/sftp.back" "$work/sftp.auto" "$work/sftp.program"
+"$bin/sftp" "${a[@]}" -dir "$work/project" -remote "$home" -back "$work/sftp.back"
+diff -r "$work/project" "$work/sftp.back/project"
+"$bin/sftp" "${a[@]}" -auto -dir "$work/project" -remote "$home" -back "$work/sftp.auto"
+diff -r "$work/project" "$work/sftp.auto/project"
+for program in /usr/lib/openssh/sftp-server /usr/libexec/sftp-server /usr/lib/sftp-server; do
+	if [ -x "$program" ]; then
+		mkdir -p "$work/sftp.local"
+		"$bin/sftp" -program "$program" -dir "$work/project" -remote "$work/sftp.local" -back "$work/sftp.program"
+		diff -r "$work/project" "$work/sftp.program/project"
+		break
+	fi
+done
 
 step server
 mkdir -p "$work/serverkey" "$work/share"

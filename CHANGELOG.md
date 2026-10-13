@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- SFTP, as `scp -s` does, in the separate module
+  `github.com/antimatter-studios/go-scp/pkg/sftp`, built on
+  `github.com/pkg/sftp`: `sftp.Client` with `CopyTo` and `CopyFrom`,
+  `NewProgramClient` for a local server program (`-D`), `Requests` and
+  `BufferSize` (`-X`), and `Auto`, which falls back to the classic protocol
+  when a host offers no SFTP.
+- Uploads over SFTP copy through plain writes, since `github.com/pkg/sftp`'s
+  `File.ReadFrom` can report a file whole when the server refused its last
+  part.
 - `Client.ForwardAgent` forwards the caller's agent, as `scp -A` does, so
   `CopyOnHost` can reach the second host with the caller's keys.
 - Every remote command ends scp's options with `--`, so a path that starts with
