@@ -75,15 +75,14 @@ func NewClient(conn *ssh.Client) *Client {
 func NewProgramClient(program string, args ...string) *Client {
 	return &Client{session: func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
 		cmd := exec.Command(program, args...)
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			return nil, nil, err
+		// The pipes fail only once the program has started, which it has not.
+		stdin, inErr := cmd.StdinPipe()
+		stdout, outErr := cmd.StdoutPipe()
+		err := errors.Join(inErr, outErr)
+		if err == nil {
+			err = cmd.Start()
 		}
-		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			return nil, nil, err
-		}
-		if err := cmd.Start(); err != nil {
 			return nil, nil, err
 		}
 		c, err := pkgsftp.NewClientPipe(stdout, stdin, opts...)

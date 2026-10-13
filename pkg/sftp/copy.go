@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -88,7 +89,10 @@ func (c *Client) putFile(client *pkgsftp.Client, local, remote string, info fs.F
 		err = out.Chmod(info.Mode().Perm() &^ 0o022)
 	}
 	if err == nil {
-		_, err = out.ReadFrom(in)
+		// Copied through plain Write calls: github.com/pkg/sftp's File.ReadFrom
+		// drops the error of a write that ends the file part-way through a packet,
+		// and reports the copy whole.
+		_, err = io.Copy(struct{ io.Writer }{out}, struct{ io.Reader }{in})
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
