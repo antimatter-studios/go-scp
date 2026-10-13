@@ -21,4 +21,4 @@ tasks:
   fuzz:
     desc: Fuzz the control-line parser for a minute
     cmds:
-      - go test -run '^$' -fuzz FuzzParseHeader -fuzztime 60s .
+      - go test -run '^$' -fuzz FuzzParseHeader -fuzztime 60s ./pkg/scp

@@ -7,6 +7,10 @@ Both ends of the classic scp file-copy protocol in Go, over
 go get github.com/antimatter-studios/go-scp
 ```
 
+```go
+import "github.com/antimatter-studios/go-scp/pkg/scp"
+```
+
 - **Client** copies a single file to or from a remote host over an SSH connection
   you have already dialled. The other end is the remote host's own `scp` program,
   so nothing needs installing there and nothing runs locally but Go.

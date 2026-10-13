@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.0 — 2026-10-13
+
+- The package moves from the module root to pkg/scp; import
+  github.com/antimatter-studios/go-scp/pkg/scp. v0.1.0 is retracted.
+
 ## v0.1.0 — 2026-10-13
 
 - Client: read and write a single file on a remote host over an x/crypto/ssh
