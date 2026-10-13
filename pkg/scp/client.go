@@ -255,55 +255,28 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	sess, err := c.openSession()
+	p, err := c.start(ctx, command)
 	if err != nil {
 		return err
 	}
-	defer sess.Close()
-	stop := context.AfterFunc(ctx, func() { sess.Close() })
-	defer stop()
+	defer p.close()
 
-	stdin, err := sess.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := sess.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderrPipe, err := sess.StderrPipe()
-	if err != nil {
-		return err
-	}
-	// Collected by this goroutine alone; read only once it has finished, which it
-	// does when the session ends.
-	var stderr bytes.Buffer
-	stderrDone := make(chan struct{})
-	go func() {
-		io.Copy(&stderr, stderrPipe)
-		close(stderrDone)
-	}()
-
-	if err := sess.Start(command); err != nil {
-		return err
-	}
-
-	var in io.Reader = stdout
-	var out io.Writer = stdin
+	var in io.Reader = p.stdout
+	var out io.Writer = p.stdin
 	if c.Limit > 0 {
 		pace := newLimiter(c.Limit)
-		in, out = limitedReader{r: stdout, l: pace}, limitedWriter{w: stdin, l: pace}
+		in, out = limitedReader{r: p.stdout, l: pace}, limitedWriter{w: p.stdin, l: pace}
 	}
 
 	if err := exchange(bufio.NewReader(in), out); err != nil {
-		sess.Close()
-		<-stderrDone
+		p.sess.Close()
+		<-p.stderrDone
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		var remote *RemoteError
 		if !errors.As(err, &remote) {
-			if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			if msg := strings.TrimSpace(p.stderr.String()); msg != "" {
 				err = fmt.Errorf("%w (remote: %s)", err, msg)
 			}
 		}
@@ -312,8 +285,8 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 
 	// End of input, so the remote scp finishes and exits. It may have done so
 	// already, which makes closing fail harmlessly: its exit status is the verdict.
-	stdin.Close()
-	if err := sess.Wait(); err != nil {
+	p.stdin.Close()
+	if err := p.wait(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
