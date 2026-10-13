@@ -196,3 +196,28 @@ func TestIntegrationHostsReachEachOtherByName(t *testing.T) {
 		t.Fatalf("host-a reached %q, want host-b", got)
 	}
 }
+
+func TestIntegrationCopyBetweenHostsThroughThisOne(t *testing.T) {
+	connA, connB := dialHost(t, "GOSCP_HOST_A"), dialHost(t, "GOSCP_HOST_B")
+	src, dst := NewClient(connA), NewClient(connB)
+	src.Recursive = true
+	local := t.TempDir()
+	writeTree(t, local, tree)
+	onA, onB := remoteDir(t, connA), remoteDir(t, connB)
+	if err := src.CopyTo(t.Context(), onA, filepath.Join(local, "project")); err != nil {
+		t.Fatalf("CopyTo host-a: %v", err)
+	}
+
+	if err := CopyBetween(t.Context(), src, []string{onA + "/project"}, dst, onB); err != nil {
+		t.Fatalf("CopyBetween: %v", err)
+	}
+
+	dst.Recursive = true
+	back := t.TempDir()
+	if err := dst.CopyFrom(t.Context(), back, onB+"/project"); err != nil {
+		t.Fatalf("CopyFrom host-b: %v", err)
+	}
+	if got := readTree(t, back); !reflect.DeepEqual(got, tree) {
+		t.Errorf("host-b holds %v\nwant %v", got, tree)
+	}
+}
