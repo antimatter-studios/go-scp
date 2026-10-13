@@ -28,10 +28,10 @@ func TestClientRoundTripsThroughThePackagesServer(t *testing.T) {
 	name := filepath.Join(awkwardDir(t), "notes.txt")
 	content := []byte("line one\n\x00binary\xff'quoted' $(not run)\n")
 
-	if err := c.WriteFile(name, content, 0o640); err != nil {
+	if err := c.WriteFile(t.Context(), name, content, 0o640); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	got, err := c.ReadFile(name)
+	got, err := c.ReadFile(t.Context(), name)
 	if err != nil || !bytes.Equal(got, content) {
 		t.Fatalf("ReadFile = (%q, %v), want %q", got, err, content)
 	}
@@ -48,7 +48,7 @@ func TestDownloadReturnsTheHeader(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	h, err := c.Download(name, &buf)
+	h, err := c.Download(t.Context(), name, &buf)
 
 	if err != nil || buf.String() != "hello" || h != (Header{Mode: 0o600, Size: 5, Name: "notes.txt"}) {
 		t.Fatalf("Download = (%+v, %v), body %q", h, err, buf.String())
@@ -58,7 +58,7 @@ func TestDownloadReturnsTheHeader(t *testing.T) {
 func TestReadFileOfAMissingFileIsTheRemotesError(t *testing.T) {
 	c := newTestServer(t, fileServer).dial(t)
 
-	_, err := c.ReadFile(filepath.Join(t.TempDir(), "absent"))
+	_, err := c.ReadFile(t.Context(), filepath.Join(t.TempDir(), "absent"))
 
 	var remote *RemoteError
 	if !errors.As(err, &remote) || !strings.Contains(remote.Message, "No such file or directory") {
@@ -73,7 +73,7 @@ func TestUploadOverALongerFileLeavesOnlyTheNewContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := c.WriteFile(name, []byte("short"), 0o644); err != nil {
+	if err := c.WriteFile(t.Context(), name, []byte("short"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestUploadOverALongerFileLeavesOnlyTheNewContent(t *testing.T) {
 func TestUploadIntoAMissingDirectoryIsTheRemotesError(t *testing.T) {
 	c := newTestServer(t, fileServer).dial(t)
 
-	err := c.WriteFile(filepath.Join(t.TempDir(), "no-such-dir", "notes.txt"), []byte("x"), 0o644)
+	err := c.WriteFile(t.Context(), filepath.Join(t.TempDir(), "no-such-dir", "notes.txt"), []byte("x"), 0o644)
 
 	var remote *RemoteError
 	if !errors.As(err, &remote) {
@@ -99,7 +99,7 @@ func TestUploadIntoAMissingDirectoryIsTheRemotesError(t *testing.T) {
 func TestUploadRefusesAPathWithoutAFileName(t *testing.T) {
 	c := newTestServer(t, fileServer).dial(t)
 
-	if err := c.WriteFile("/", []byte("x"), 0o644); err == nil {
+	if err := c.WriteFile(t.Context(), "/", []byte("x"), 0o644); err == nil {
 		t.Fatal("an upload to / must be refused before anything is sent")
 	}
 }
@@ -113,7 +113,7 @@ func TestDownloadRefusesAFileOverMaxSize(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	if _, err := c.Download(name, &buf); err == nil || buf.Len() != 0 {
+	if _, err := c.Download(t.Context(), name, &buf); err == nil || buf.Len() != 0 {
 		t.Fatalf("Download = %v with %d bytes written, want refusal before the body", err, buf.Len())
 	}
 }
@@ -127,7 +127,7 @@ func TestDownloadDoesNotTrustAClaimedSize(t *testing.T) {
 		return 0
 	}).dial(t)
 
-	if _, err := c.ReadFile("/huge"); err == nil {
+	if _, err := c.ReadFile(t.Context(), "/huge"); err == nil {
 		t.Fatal("a body shorter than its claimed size must fail, without allocating the claim")
 	}
 }
@@ -138,7 +138,7 @@ func TestErrorsCarryTheRemotesStderrWhenScpCannotStart(t *testing.T) {
 		return 127
 	}).dial(t)
 
-	_, err := c.ReadFile("/anything")
+	_, err := c.ReadFile(t.Context(), "/anything")
 
 	if err == nil || !strings.Contains(err.Error(), "scp: not found") {
 		t.Fatalf("err = %v, want the remote's own reason", err)
@@ -154,7 +154,7 @@ func TestProgramReplacesTheRemoteCommand(t *testing.T) {
 	c.Program = "/opt/bin/scp"
 	name := filepath.Join(t.TempDir(), "notes.txt")
 
-	if err := c.WriteFile(name, []byte("x"), 0o644); err != nil {
+	if err := c.WriteFile(t.Context(), name, []byte("x"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	if got != "/opt/bin/scp -t "+Quote(name) {

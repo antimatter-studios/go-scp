@@ -53,10 +53,10 @@ func TestClientAgainstOpenSSHScp(t *testing.T) {
 	t.Run("write then read", func(t *testing.T) {
 		name := filepath.Join(dir, "notes.txt")
 		content := []byte("line one\n\x00binary\xff'quoted' $(not run)\n")
-		if err := c.WriteFile(name, content, 0o640); err != nil {
+		if err := c.WriteFile(t.Context(), name, content, 0o640); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
-		got, err := c.ReadFile(name)
+		got, err := c.ReadFile(t.Context(), name)
 		if err != nil || !bytes.Equal(got, content) {
 			t.Fatalf("ReadFile = (%q, %v)", got, err)
 		}
@@ -67,7 +67,7 @@ func TestClientAgainstOpenSSHScp(t *testing.T) {
 		if err := os.WriteFile(name, []byte("a much longer old file"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.WriteFile(name, []byte("short"), 0o644); err != nil {
+		if err := c.WriteFile(t.Context(), name, []byte("short"), 0o644); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
 		if got, _ := os.ReadFile(name); string(got) != "short" {
@@ -79,7 +79,7 @@ func TestClientAgainstOpenSSHScp(t *testing.T) {
 	})
 
 	t.Run("a missing file is scp's own report", func(t *testing.T) {
-		_, err := c.ReadFile(filepath.Join(dir, "absent"))
+		_, err := c.ReadFile(t.Context(), filepath.Join(dir, "absent"))
 		var remote *RemoteError
 		if !errors.As(err, &remote) || !strings.Contains(remote.Message, "No such file") {
 			t.Fatalf("err = %v", err)
@@ -87,7 +87,7 @@ func TestClientAgainstOpenSSHScp(t *testing.T) {
 	})
 
 	t.Run("a directory is refused", func(t *testing.T) {
-		if _, err := c.ReadFile(dir); err == nil {
+		if _, err := c.ReadFile(t.Context(), dir); err == nil {
 			t.Fatal("reading a directory must fail")
 		}
 	})
