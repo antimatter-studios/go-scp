@@ -195,6 +195,21 @@ it is dialled:
 | `-B` | `x/crypto/ssh` never prompts; nothing to set |
 | `-q`, `-v` | no output of its own; errors carry the detail |
 
+## Testing
+
+Three layers, all run by CI:
+
+- **Unit tests** (`go test ./...`): both halves against each other over an
+  in-process SSH server, the wire format byte for byte, and fuzzing of the
+  control-line parser.
+- **OpenSSH interoperability**: the client against OpenSSH's `scp` as the remote
+  end, and OpenSSH's `scp -O` client against the server half. Part of the unit
+  tests; they run wherever `scp` is installed.
+- **Integration** (`scripts/integration.sh`, needs Docker): two `sshd`
+  containers on one network (`test/network`). Every remote command goes through
+  a real login shell, so quoting, wildcards and `sudo scp` are tested as they
+  run in production.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
