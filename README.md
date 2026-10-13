@@ -169,7 +169,7 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 | Copy local paths, as the command does | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`, `DirSink` |
 | `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` |
 | `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors |
-| `-R` remote to remote, run on the first host | 🚧 Planned | |
+| `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second |
 | `-s`, `-D`, `-X` SFTP mode | ❌ Not supported | this library is the classic protocol only |
 | `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression |
 
