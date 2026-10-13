@@ -12,7 +12,7 @@ import (
 )
 
 // writeTree creates files under dir from a map of slash-separated paths to contents.
-func writeTree(t *testing.T, dir string, files map[string]string) {
+func writeTree(t testing.TB, dir string, files map[string]string) {
 	t.Helper()
 	for name, content := range files {
 		p := filepath.Join(dir, filepath.FromSlash(name))

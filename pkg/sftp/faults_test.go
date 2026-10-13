@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,13 @@ type faults struct {
 	failWritesFrom int64 // -1 for none
 	listing        map[string][]string
 	mem            pkgsftp.Handlers
+
+	// latency delays every read, as a slow link would delay each request's
+	// answer; reading counts the reads waiting at once, and mostReading the most
+	// there have been.
+	latency     time.Duration
+	reading     atomic.Int32
+	mostReading atomic.Int32
 }
 
 func (f *faults) fails(r *pkgsftp.Request) bool {
@@ -45,7 +53,27 @@ func (f *faults) Fileread(r *pkgsftp.Request) (io.ReaderAt, error) {
 	if f.fails(r) {
 		return nil, errFault
 	}
-	return f.mem.FileGet.Fileread(r)
+	reader, err := f.mem.FileGet.Fileread(r)
+	if err != nil || f.latency == 0 {
+		return reader, err
+	}
+	return slowReaderAt{reader, f}, nil
+}
+
+// slowReaderAt answers each read after its server's latency, counting the reads
+// that wait at once.
+type slowReaderAt struct {
+	io.ReaderAt
+	f *faults
+}
+
+func (s slowReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	now := s.f.reading.Add(1)
+	for most := s.f.mostReading.Load(); now > most && !s.f.mostReading.CompareAndSwap(most, now); most = s.f.mostReading.Load() {
+	}
+	time.Sleep(s.f.latency)
+	s.f.reading.Add(-1)
+	return s.ReaderAt.ReadAt(p, off)
 }
 
 func (f *faults) Filewrite(r *pkgsftp.Request) (io.WriterAt, error) {
@@ -128,8 +156,12 @@ func (namedFile) Sys() any           { return nil }
 
 // faultyClient returns a Client whose sessions reach f's in-memory filesystem.
 func faultyClient(f *faults) *Client {
-	h := pkgsftp.Handlers{FileGet: f, FilePut: f, FileCmd: f, FileList: f}
-	return &Client{session: func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
+	return &Client{session: pipeSession(pkgsftp.Handlers{FileGet: f, FilePut: f, FileCmd: f, FileList: f})}
+}
+
+// pipeSession starts sessions with an in-memory SFTP server that answers with h.
+func pipeSession(h pkgsftp.Handlers) func(...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
+	return func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
 		clientReads, serverWrites := io.Pipe()
 		serverReads, clientWrites := io.Pipe()
 		server := pkgsftp.NewRequestServer(stdio{serverReads, serverWrites}, h)
@@ -146,7 +178,7 @@ func faultyClient(f *faults) *Client {
 			c.Close()
 			return err
 		}, nil
-	}}
+	}
 }
 
 func newFaults() *faults { return &faults{mem: pkgsftp.InMemHandler(), failWritesFrom: -1} }
