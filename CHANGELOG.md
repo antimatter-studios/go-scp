@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.0 — 2026-10-13
+
+- `Client.Limit` caps a client transfer's rate in bytes per second, as `scp -l`
+  does.
+- `CopyBetween` copies between two remote hosts through this program, as
+  `scp -3` does: each file is read from one host and written to the other, with
+  name checks and per-file errors.
+- `Client.CopyOnHost` runs scp on the connected host to copy to another host, as
+  `scp -R` does.
+- `examples/` has a runnable program for every feature, linked from the README.
+- CI tests against two `sshd` containers on one network, runs every example
+  against them, and fails unless the tests cover every statement in `pkg/`.
+
 ## v0.4.0 — 2026-10-13
 
 - `Client.CopyTo` and `Client.CopyFrom` copy local paths to and from a remote

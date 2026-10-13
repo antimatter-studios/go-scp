@@ -27,3 +27,18 @@ tasks:
     desc: Run the tests with coverage and print the total
     cmds:
       - scripts/coverage.sh
+
+  coverage:gate:
+    desc: Fail unless the tests cover every statement in pkg/, as CI does
+    cmds:
+      - scripts/coverage-gate.sh
+
+  test:integration:
+    desc: Run the integration tests against two sshd containers (needs Docker)
+    cmds:
+      - scripts/integration.sh
+
+  examples:
+    desc: Run every example against two sshd containers (needs Docker)
+    cmds:
+      - scripts/examples.sh

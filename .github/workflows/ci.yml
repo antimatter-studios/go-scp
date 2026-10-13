@@ -39,22 +39,57 @@ jobs:
           set -euo pipefail
           command -v scp
           go test -race -count=1 ./pkg/scp/...
+      # Every statement in pkg/ must be covered; the step names whatever is not.
+      - name: Coverage
+        run: scripts/coverage-gate.sh
+
+  # The library against real SSH hosts: two sshd containers on one network,
+  # started and stopped by scripts/integration.sh. Every remote command goes
+  # through a real login shell.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache: true
+      - name: Integration tests
+        run: scripts/integration.sh -v
+
+  # Every program in examples/, run against the same test network and checked.
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache: true
+      - name: Examples
+        run: scripts/examples.sh
 
   # The one required check: it stands for every job above, and fails when any of
   # them failed, was cancelled or was skipped.
   ci-ok:
     if: always()
-    needs: [test]
+    needs: [test, integration, examples]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
         env:
-          RESULT: ${{ needs.test.result }}
+          TEST: ${{ needs.test.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+          EXAMPLES: ${{ needs.examples.result }}
         run: |
-          if [ "$RESULT" != "success" ]; then
-            echo "test: $RESULT" >&2
-            exit 1
-          fi
+          failed=0
+          for job in "test:$TEST" "integration:$INTEGRATION" "examples:$EXAMPLES"; do
+            if [ "${job#*:}" != "success" ]; then
+              echo "$job" >&2
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   # Publishes the coverage figure for the README badge: a shields.io endpoint file
   # on the badges branch, rewritten on every push to main. Not part of ci-ok, so a

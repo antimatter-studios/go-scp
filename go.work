@@ -4,4 +4,6 @@ go 1.25.0
 
 use (
 	./pkg/scp
+	./examples
+	./test
 )

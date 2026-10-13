@@ -94,10 +94,12 @@ func (s *DirSink) File(h Header, body io.Reader) error {
 	if !s.opts.Preserve {
 		return nil
 	}
-	if err := file.Chmod(h.Mode); err != nil {
-		return err
+	// Times are set only once the mode is, as scp does.
+	err = file.Chmod(h.Mode)
+	if err == nil {
+		err = s.applyTimes(rel, h)
 	}
-	return s.applyTimes(rel, h)
+	return err
 }
 
 // EnterDir creates the directory unless it exists, writable by its owner until it

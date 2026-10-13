@@ -176,6 +176,7 @@ func fileServer(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		if err := SendFS(stdin, stdout, rootFS, names, SendOptions{Recursive: c.Recursive, Preserve: c.Preserve}); err != nil {
+			io.WriteString(stderr, err.Error()+"\n")
 			return 1
 		}
 		return 0
@@ -192,6 +193,8 @@ func fileServer(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
 		sink = dir
 	}
 	if err := ReceiveAll(stdin, stdout, ReceiveOptions{Recursive: c.Recursive}, sink); err != nil {
+		// As scp does, including the failures the sending side reported.
+		io.WriteString(stderr, err.Error()+"\n")
 		return 1
 	}
 	return 0
