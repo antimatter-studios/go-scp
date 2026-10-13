@@ -1,0 +1,6 @@
+# .github-guard — declarations github-guard reads.
+# git-config format: check with `git config -f .github-guard --list`.
+
+[checks]
+	# ci.yml's ci-ok job needs every other CI job and fails unless all succeeded.
+	required = ci-ok

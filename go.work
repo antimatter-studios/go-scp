@@ -1,0 +1,7 @@
+// The modules in this repository, so commands run from the root build and
+// test them together. Programs that require them never see this file.
+go 1.25.0
+
+use (
+	./pkg/scp
+)

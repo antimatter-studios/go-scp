@@ -1,0 +1,24 @@
+version: "3"
+
+tasks:
+  test:
+    desc: Run the tests with the race detector
+    cmds:
+      - go test -race -count=1 ./pkg/scp/...
+
+  lint:
+    desc: gofmt and vet
+    cmds:
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "gofmt would change:" >&2
+          echo "$unformatted" >&2
+          exit 1
+        fi
+      - go vet ./pkg/scp/...
+
+  fuzz:
+    desc: Fuzz the control-line parser for a minute
+    cmds:
+      - go test -run '^$' -fuzz FuzzParseHeader -fuzztime 60s ./pkg/scp
