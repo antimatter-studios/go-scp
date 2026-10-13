@@ -14,10 +14,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Client copies single files to and from a remote host over an SSH connection, with
-// the remote host's scp program as the other end of each transfer. Each transfer
-// opens its own session on the connection, so one Client serves any number of them,
-// one after another or at once.
+// Client copies files and directories to and from a remote host over an SSH
+// connection, with the remote host's scp program as the other end of each
+// transfer. Each transfer opens its own session on the connection, so one Client
+// serves any number of them, one after another or at once.
 type Client struct {
 	// newSession opens a session on the connection. A field so a test can give the
 	// client scripted sessions that fail where a live one would not.
