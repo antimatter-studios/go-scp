@@ -47,6 +47,11 @@ type Client struct {
 	// for, as "scp -T" does. A name that could reach outside the target is refused
 	// whatever this says.
 	AnyNames bool
+
+	// Limit, when positive, caps each transfer at that many bytes per second, both
+	// directions together, as "scp -l" does. scp's -l counts Kbit/s, so -l n is a
+	// Limit of n*1000/8.
+	Limit int64
 }
 
 // NewClient returns a Client that makes its transfers over conn. Verifying the
@@ -240,7 +245,14 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 		return err
 	}
 
-	if err := exchange(bufio.NewReader(stdout), stdin); err != nil {
+	var in io.Reader = stdout
+	var out io.Writer = stdin
+	if c.Limit > 0 {
+		pace := newLimiter(c.Limit)
+		in, out = limitedReader{r: stdout, l: pace}, limitedWriter{w: stdin, l: pace}
+	}
+
+	if err := exchange(bufio.NewReader(in), out); err != nil {
 		sess.Close()
 		<-stderrDone
 		if ctxErr := ctx.Err(); ctxErr != nil {
