@@ -128,6 +128,20 @@ func (c Command) Expand(fsys fs.FS) ([]string, error) {
 	return names, nil
 }
 
+// Characters with a meaning to a POSIX shell, as splitWords reads a command.
+const (
+	// wordSeparators end a word outside quotes.
+	wordSeparators = " \t\n"
+	// shellOperators would make a command more than one plain command, or ask the
+	// shell for a substitution.
+	shellOperators = ";|&<>()$`"
+	// doubleQuoteEscapes are the characters a backslash escapes inside double
+	// quotes; before any other character it stays as it is.
+	doubleQuoteEscapes = "\\\"$`\n"
+	// wildcards start a pattern for the shell to expand, outside quotes.
+	wildcards = "*?["
+)
+
 // splitWords splits cmd into words as a POSIX shell would, and reports which words
 // held a wildcard outside quotes.
 func splitWords(cmd string) (words []string, patterns []bool, err error) {
@@ -145,43 +159,24 @@ func splitWords(cmd string) (words []string, patterns []bool, err error) {
 	for i := 0; i < len(cmd); i++ {
 		ch := cmd[i]
 		switch {
-		case ch == ' ' || ch == '\t' || ch == '\n':
+		case strings.IndexByte(wordSeparators, ch) >= 0:
 			end()
-		case ch == '\'':
-			closing := strings.IndexByte(cmd[i+1:], '\'')
-			if closing < 0 {
-				return nil, nil, errors.New("scp: unterminated single quote")
+		case ch == '\'', ch == '"':
+			quoted, closing, err := readQuoted(cmd, i)
+			if err != nil {
+				return nil, nil, err
 			}
-			word.WriteString(cmd[i+1 : i+1+closing])
-			inWord = true
-			i += closing + 1
-		case ch == '"':
-			j := i + 1
-			for ; j < len(cmd) && cmd[j] != '"'; j++ {
-				switch cmd[j] {
-				case '\\':
-					if j+1 < len(cmd) && strings.IndexByte("\\\"$`\n", cmd[j+1]) >= 0 {
-						j++
-					}
-				case '$', '`':
-					return nil, nil, fmt.Errorf("scp: %q asks the shell for a substitution", cmd)
-				}
-				word.WriteByte(cmd[j])
-			}
-			if j >= len(cmd) {
-				return nil, nil, errors.New("scp: unterminated double quote")
-			}
-			inWord = true
-			i = j
+			word.WriteString(quoted)
+			inWord, i = true, closing
 		case ch == '\\':
 			if i+1 < len(cmd) {
 				i++
 				word.WriteByte(cmd[i])
 				inWord = true
 			}
-		case strings.IndexByte(";|&<>()$`", ch) >= 0:
+		case strings.IndexByte(shellOperators, ch) >= 0:
 			return nil, nil, fmt.Errorf("scp: %q is more than a plain scp command", cmd)
-		case ch == '~' && !inWord && (i+1 == len(cmd) || strings.IndexByte("/ \t\n", cmd[i+1]) >= 0):
+		case ch == '~' && !inWord && startsLoginDirectory(cmd, i):
 			// An unquoted ~ that starts a word is the login directory, which is
 			// where an scp session starts, so ~/x is x and ~ is ".", as the shell
 			// would have it. OpenSSH's scp client sends such paths unquoted.
@@ -189,17 +184,52 @@ func splitWords(cmd string) (words []string, patterns []bool, err error) {
 			if i+1 < len(cmd) && cmd[i+1] == '/' {
 				i++
 			}
-			if i+1 == len(cmd) || strings.IndexByte(" \t\n", cmd[i+1]) >= 0 {
+			if wordEndsAt(cmd, i+1) {
 				word.WriteByte('.')
 			}
 		default:
-			if ch == '*' || ch == '?' || ch == '[' {
-				pattern = true
-			}
+			pattern = pattern || strings.IndexByte(wildcards, ch) >= 0
 			word.WriteByte(ch)
 			inWord = true
 		}
 	}
 	end()
 	return words, patterns, nil
+}
+
+// wordEndsAt reports whether the word being read ends before cmd[i].
+func wordEndsAt(cmd string, i int) bool {
+	return i == len(cmd) || strings.IndexByte(wordSeparators, cmd[i]) >= 0
+}
+
+// startsLoginDirectory reports whether the ~ at cmd[i] stands alone or starts a
+// path, rather than being the start of a name such as ~user.
+func startsLoginDirectory(cmd string, i int) bool {
+	return wordEndsAt(cmd, i+1) || cmd[i+1] == '/'
+}
+
+// readQuoted reads the quoted text that opens at cmd[open], single- or
+// double-quoted, and returns it as the shell would read it, with the index of the
+// closing quote.
+func readQuoted(cmd string, open int) (text string, closing int, err error) {
+	if cmd[open] == '\'' {
+		end := strings.IndexByte(cmd[open+1:], '\'')
+		if end < 0 {
+			return "", 0, errors.New("scp: unterminated single quote")
+		}
+		return cmd[open+1 : open+1+end], open + 1 + end, nil
+	}
+	var b strings.Builder
+	for j := open + 1; j < len(cmd); j++ {
+		switch ch := cmd[j]; {
+		case ch == '"':
+			return b.String(), j, nil
+		case ch == '$' || ch == '`':
+			return "", 0, fmt.Errorf("scp: %q asks the shell for a substitution", cmd)
+		case ch == '\\' && j+1 < len(cmd) && strings.IndexByte(doubleQuoteEscapes, cmd[j+1]) >= 0:
+			j++
+		}
+		b.WriteByte(cmd[j])
+	}
+	return "", 0, errors.New("scp: unterminated double quote")
 }
