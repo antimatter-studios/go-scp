@@ -151,16 +151,20 @@ func (s *testServer) dial(t *testing.T) *Client {
 	return NewClient(conn)
 }
 
-// scpCommand reads the flag and path from an scp command line. The path may be
-// quoted as Quote does, or bare as OpenSSH's own client sends it.
-func scpCommand(cmd string) (flag, path string, ok bool) {
+// scpCommand reads the direction flag, whether -p was given, and the path from an
+// scp command line. The path may be quoted as Quote does, or bare as OpenSSH's own
+// client sends it.
+func scpCommand(cmd string) (flag string, preserve bool, path string, ok bool) {
 	fields := strings.Fields(cmd)
 	if len(fields) < 3 || fields[0] != "scp" {
-		return "", "", false
+		return "", false, "", false
 	}
 	for _, f := range fields[1 : len(fields)-1] {
-		if f == "-t" || f == "-f" {
+		switch f {
+		case "-t", "-f":
 			flag = f
+		case "-p":
+			preserve = true
 		}
 	}
 	rest := strings.TrimSpace(cmd[strings.Index(cmd, flag)+len(flag):])
@@ -170,13 +174,14 @@ func scpCommand(cmd string) (flag, path string, ok bool) {
 	if len(rest) >= 2 && rest[0] == '\'' && rest[len(rest)-1] == '\'' {
 		rest = strings.ReplaceAll(rest[1:len(rest)-1], `'\''`, `'`)
 	}
-	return flag, rest, flag != "" && rest != ""
+	return flag, preserve, rest, flag != "" && rest != ""
 }
 
 // fileServer answers scp commands with Receive and Send over the local filesystem,
-// writing a received file the way scp does: in place, then cut to length.
+// writing a received file the way scp does: in place, then cut to length. With -p
+// it sends a file's modification time, and applies received times and the mode.
 func fileServer(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
-	flag, name, ok := scpCommand(cmd)
+	flag, preserve, name, ok := scpCommand(cmd)
 	if !ok {
 		io.WriteString(stderr, "sh: "+strings.Fields(cmd + " x")[0]+": not found\n")
 		return 127
@@ -194,7 +199,11 @@ func fileServer(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
 			SendFailure(stdin, stdout, "scp: "+name+": not a regular file")
 			return 1
 		}
-		if err := Send(stdin, stdout, Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: filepath.Base(name)}, file); err != nil {
+		h := Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: filepath.Base(name)}
+		if preserve {
+			h.ModTime, h.AccessTime = info.ModTime(), info.ModTime()
+		}
+		if err := Send(stdin, stdout, h, file); err != nil {
 			return 1
 		}
 		return 0
@@ -209,7 +218,19 @@ func fileServer(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if _, err := io.Copy(file, body); err != nil {
 			return err
 		}
-		return file.Truncate(h.Size)
+		if err := file.Truncate(h.Size); err != nil {
+			return err
+		}
+		if !preserve {
+			return nil
+		}
+		if err := file.Chmod(h.Mode); err != nil {
+			return err
+		}
+		if h.ModTime.IsZero() {
+			return nil
+		}
+		return os.Chtimes(name, h.AccessTime, h.ModTime)
 	})
 	if err != nil {
 		return 1

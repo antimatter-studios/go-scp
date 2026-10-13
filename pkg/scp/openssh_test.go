@@ -27,12 +27,16 @@ func requireOpenSSHScp(t *testing.T) string {
 // directly rather than through a shell.
 func openSSHServer(scp string) handler {
 	return func(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
-		flag, name, ok := scpCommand(cmd)
+		flag, preserve, name, ok := scpCommand(cmd)
 		if !ok {
 			io.WriteString(stderr, "not an scp command\n")
 			return 127
 		}
-		c := exec.Command(scp, flag, name)
+		args := []string{flag, name}
+		if preserve {
+			args = []string{"-p", flag, name}
+		}
+		c := exec.Command(scp, args...)
 		c.Stdin, c.Stdout, c.Stderr = stdin, stdout, stderr
 		err := c.Run()
 		var exitErr *exec.ExitError
