@@ -98,6 +98,10 @@ mkdir -p "$work/sftp.back" "$work/sftp.auto" "$work/sftp.program"
 diff -r "$work/project" "$work/sftp.back/project"
 "$bin/sftp" "${a[@]}" -auto -dir "$work/project" -remote "$home" -back "$work/sftp.auto"
 diff -r "$work/project" "$work/sftp.auto/project"
+mkdir -p "$work/sftp.between"
+"$bin/sftp" "${a[@]}" -dst-addr "127.0.0.1:$HOST_B_PORT" -dst-user tester -dst-key "$key" -dst-insecure \
+	-dir "$work/project" -remote "$home" -back "$work/sftp.between"
+diff -r "$work/project" "$work/sftp.between/project"
 for program in /usr/lib/openssh/sftp-server /usr/libexec/sftp-server /usr/lib/sftp-server; do
 	if [ -x "$program" ]; then
 		mkdir -p "$work/sftp.local"
