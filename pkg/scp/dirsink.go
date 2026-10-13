@@ -70,6 +70,10 @@ func (s *DirSink) Close() error {
 	return s.root.Close()
 }
 
+// ownerAll lets a directory's owner list, enter and add to it, which a DirSink
+// needs while it writes the directory's entries, whatever mode it ends with.
+const ownerAll = 0o700
+
 // maxPath is the longest path a DirSink writes under its target, the PATH_MAX of
 // Linux. OpenSSH's scp stops at the system's limit because it builds whole paths;
 // an os.Root has no such limit, so without one a sender could nest directories
@@ -152,7 +156,7 @@ func (s *DirSink) EnterDir(h Header) error {
 	case err == nil && !info.IsDir():
 		return fmt.Errorf("scp: %s: not a directory", at.rel)
 	case errors.Is(err, fs.ErrNotExist):
-		err = at.root.Mkdir(at.name, h.Mode|0o700)
+		err = at.root.Mkdir(at.name, h.Mode|ownerAll)
 	}
 	if err != nil {
 		return err

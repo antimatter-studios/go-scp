@@ -11,6 +11,11 @@ import (
 	pkgsftp "github.com/pkg/sftp"
 )
 
+// defaultUmask is what a server usually takes off the mode of a file it creates,
+// and what is taken off a new entry's mode here, since github.com/pkg/sftp cannot
+// pass a mode when it creates one.
+const defaultUmask = 0o022
+
 // remoteWriter writes files and directories on a remote host over one SFTP
 // session: the receiving end that CopyTo and CopyBetween share.
 type remoteWriter struct {
@@ -34,7 +39,7 @@ func (w remoteWriter) writeFile(path string, mode fs.FileMode, mtime time.Time, 
 	case w.preserve:
 		err = out.Chmod(mode)
 	case created:
-		err = out.Chmod(mode &^ 0o022)
+		err = out.Chmod(mode &^ defaultUmask)
 	}
 	if err == nil {
 		// Copied through plain Write calls: github.com/pkg/sftp's File.ReadFrom
@@ -87,7 +92,7 @@ func (w remoteWriter) closeDir(path string, mode fs.FileMode, mtime time.Time, c
 			err = w.conn.Chtimes(path, mtime, mtime)
 		}
 	case created:
-		err = w.conn.Chmod(path, mode&^0o022)
+		err = w.conn.Chmod(path, mode&^defaultUmask)
 	}
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", path, err)

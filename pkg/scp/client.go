@@ -10,14 +10,15 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
 
-// Client copies single files to and from a remote host over an SSH connection, with
-// the remote host's scp program as the other end of each transfer. Each transfer
-// opens its own session on the connection, so one Client serves any number of them,
-// one after another or at once.
+// Client copies files and directories to and from a remote host over an SSH
+// connection, with the remote host's scp program as the other end of each
+// transfer. Each transfer opens its own session on the connection, so one Client
+// serves any number of them, one after another or at once.
 type Client struct {
 	// newSession opens a session on the connection. A field so a test can give the
 	// client scripted sessions that fail where a live one would not.
@@ -102,34 +103,14 @@ func (c *Client) openSession() (session, error) {
 
 // Download copies the regular file at remotePath to w, and returns its header.
 func (c *Client) Download(ctx context.Context, remotePath string, w io.Writer) (Header, error) {
-	var h Header
+	file := &oneFile{take: func(h Header, body io.Reader) error {
+		_, err := io.Copy(w, body)
+		return err
+	}}
 	err := c.run(ctx, c.command("-f", Quote(remotePath)), func(r *bufio.Reader, out io.Writer) error {
-		// Ready for the file.
-		if err := writeOK(out); err != nil {
-			return err
-		}
-		var err error
-		if h, err = downloadHeader(r, out); err != nil {
-			return err
-		}
-		if c.MaxSize > 0 && h.Size > c.MaxSize {
-			_ = writeFailure(out, "file too large")
-			return fmt.Errorf("scp: %s is %d bytes, more than the %d this client accepts", remotePath, h.Size, c.MaxSize)
-		}
-		// Header accepted; send the body.
-		if err := writeOK(out); err != nil {
-			return err
-		}
-		if _, err := io.CopyN(w, r, h.Size); err != nil {
-			return fmt.Errorf("scp: reading %s: %w", remotePath, err)
-		}
-		// The sender reports whether it read the whole file.
-		if err := readStatus(r); err != nil {
-			return err
-		}
-		return writeOK(out)
+		return file.receive(r, out, c.MaxSize)
 	})
-	return h, err
+	return file.h, err
 }
 
 // ReadFile returns the contents of the regular file at remotePath.
@@ -139,46 +120,6 @@ func (c *Client) ReadFile(ctx context.Context, remotePath string) ([]byte, error
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-// downloadHeader reads up to the file's control line, keeping the times from a time
-// line on the way.
-func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
-	var times Header
-	for {
-		kind, err := r.ReadByte()
-		if err != nil {
-			return Header{}, fmt.Errorf("%w: expected a control line: %v", ErrProtocol, err)
-		}
-		switch kind {
-		case 'C':
-			line, err := readLine(r)
-			if err != nil {
-				return Header{}, fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
-			}
-			h, err := parseHeader("C" + strings.TrimRight(line, "\n"))
-			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
-			return h, err
-		case 'T':
-			line, err := readLine(r)
-			if err != nil {
-				return Header{}, fmt.Errorf("%w: reading a time line: %v", ErrProtocol, err)
-			}
-			if err := parseTimes("T"+strings.TrimRight(line, "\n"), &times); err != nil {
-				return Header{}, err
-			}
-			if err := writeOK(out); err != nil {
-				return Header{}, err
-			}
-		case 'D':
-			return Header{}, fmt.Errorf("%w: a directory was sent where a file was asked for", ErrProtocol)
-		default:
-			if err := checkStatus(r, kind); err != nil {
-				return Header{}, err
-			}
-			return Header{}, fmt.Errorf("%w: success where a control line belongs", ErrProtocol)
-		}
-	}
 }
 
 // Upload copies h.Size bytes read from body to remotePath, creating the file with
@@ -193,34 +134,19 @@ func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body i
 	if err := validName(h.Name); err != nil {
 		return err
 	}
+	if !c.Preserve {
+		h.ModTime, h.AccessTime = time.Time{}, time.Time{}
+	}
 	return c.run(ctx, c.command("-t", Quote(remotePath)), func(r *bufio.Reader, out io.Writer) error {
 		// The receiver is ready.
 		if err := readStatus(r); err != nil {
 			return err
 		}
-		if c.Preserve && h.hasTimes() {
-			if _, err := io.WriteString(out, h.timesLine()+"\n"); err != nil {
-				return err
-			}
-			if err := readStatus(r); err != nil {
-				return err
-			}
-		}
-		if _, err := io.WriteString(out, h.String()+"\n"); err != nil {
+		failure, err := sender{r, out}.file(h, body, remotePath)
+		if err != nil {
 			return err
 		}
-		// It has opened the file and waits for the body.
-		if err := readStatus(r); err != nil {
-			return err
-		}
-		if n, err := io.CopyN(out, body, h.Size); err != nil {
-			return fmt.Errorf("scp: reading the upload for %s after %d of %d bytes: %w", remotePath, n, h.Size, err)
-		}
-		if err := writeOK(out); err != nil {
-			return err
-		}
-		// And reports whether it stored it.
-		return readStatus(r)
+		return failure
 	})
 }
 
@@ -255,55 +181,28 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	sess, err := c.openSession()
+	p, err := c.start(ctx, command)
 	if err != nil {
 		return err
 	}
-	defer sess.Close()
-	stop := context.AfterFunc(ctx, func() { sess.Close() })
-	defer stop()
+	defer p.close()
 
-	stdin, err := sess.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := sess.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderrPipe, err := sess.StderrPipe()
-	if err != nil {
-		return err
-	}
-	// Collected by this goroutine alone; read only once it has finished, which it
-	// does when the session ends.
-	var stderr bytes.Buffer
-	stderrDone := make(chan struct{})
-	go func() {
-		io.Copy(&stderr, stderrPipe)
-		close(stderrDone)
-	}()
-
-	if err := sess.Start(command); err != nil {
-		return err
-	}
-
-	var in io.Reader = stdout
-	var out io.Writer = stdin
+	var in io.Reader = p.stdout
+	var out io.Writer = p.stdin
 	if c.Limit > 0 {
 		pace := newLimiter(c.Limit)
-		in, out = limitedReader{r: stdout, l: pace}, limitedWriter{w: stdin, l: pace}
+		in, out = limitedReader{r: p.stdout, l: pace}, limitedWriter{w: p.stdin, l: pace}
 	}
 
 	if err := exchange(bufio.NewReader(in), out); err != nil {
-		sess.Close()
-		<-stderrDone
+		p.sess.Close()
+		<-p.stderrDone
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		var remote *RemoteError
 		if !errors.As(err, &remote) {
-			if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			if msg := strings.TrimSpace(p.stderr.String()); msg != "" {
 				err = fmt.Errorf("%w (remote: %s)", err, msg)
 			}
 		}
@@ -312,8 +211,8 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 
 	// End of input, so the remote scp finishes and exits. It may have done so
 	// already, which makes closing fail harmlessly: its exit status is the verdict.
-	stdin.Close()
-	if err := sess.Wait(); err != nil {
+	p.stdin.Close()
+	if err := p.wait(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}

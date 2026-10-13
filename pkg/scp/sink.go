@@ -33,6 +33,10 @@ type ReceiveOptions struct {
 	// Recursive accepts directories, as "scp -r -t" does. Without it a
 	// directory ends the transfer.
 	Recursive bool
+
+	// single ends the transfer after its first file, as Receive and Download
+	// expect one file and return as soon as it is in.
+	single bool
 }
 
 // ReceiveAll serves the receiving end of a transfer, as "scp -t" does, for any
@@ -50,125 +54,161 @@ func ReceiveAll(in io.Reader, out io.Writer, opts ReceiveOptions, sink Sink) err
 // level) before anything is written under it.
 type nameCheck func(name string, depth int) error
 
-// receiveEntries is the receiving end shared by ReceiveAll and the client's
-// downloads.
+// receiveEntries is the receiving end shared by ReceiveAll, Receive, the client's
+// downloads and the copies between hosts.
 func receiveEntries(r *bufio.Reader, out io.Writer, opts ReceiveOptions, sink Sink, check nameCheck) error {
 	// Ready for the first entry.
 	if err := writeOK(out); err != nil {
 		return err
 	}
-
-	var failures []error
-	var times Header
-	depth := 0
+	rc := &receiving{r: r, out: out, opts: opts, sink: sink, check: check}
 	for {
 		line, err := readLine(r)
+		if err == io.EOF && line == "" {
+			return rc.end()
+		}
 		if err != nil {
-			if err == io.EOF && line == "" {
-				if depth != 0 {
-					return fmt.Errorf("%w: the sender stopped inside a directory", ErrProtocol)
-				}
-				return errors.Join(failures...)
-			}
 			return fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
 		}
-		line = strings.TrimRight(line, "\n")
-		if line == "" {
-			_ = writeFailure(out, "malformed control line")
-			return fmt.Errorf("%w: empty control line", ErrProtocol)
-		}
-
-		switch line[0] {
-		case statusError, statusFatal:
-			// The sender reports a failure of its own, such as a file it could
-			// not read, and carries on unless it was fatal.
-			failure := &RemoteError{Message: line[1:], Fatal: line[0] == statusFatal}
-			if failure.Fatal {
-				return errors.Join(append(failures, failure)...)
-			}
-			failures = append(failures, failure)
-
-		case 'T':
-			if err := parseTimes(line, &times); err != nil {
-				_ = writeFailure(out, "malformed time line")
-				return err
-			}
-			if err := writeOK(out); err != nil {
-				return err
-			}
-
-		case 'C':
-			h, err := parseHeader(line)
-			if err != nil {
-				_ = writeFailure(out, "malformed control line")
-				return err
-			}
-			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
-			times = Header{}
-			if err := checkName(h.Name, depth, check); err != nil {
-				_ = writeFailure(out, err.Error())
-				return err
-			}
-			if opts.MaxSize > 0 && h.Size > opts.MaxSize {
-				// Refused before the body: the sender skips it and goes on.
-				if err := writeFailure(out, h.Name+": file too large"); err != nil {
-					return err
-				}
-				failures = append(failures, fmt.Errorf("scp: %q declares %d bytes, more than the %d accepted", h.Name, h.Size, opts.MaxSize))
-				continue
-			}
-			failure, err := receiveBody(r, out, h, sink)
-			if err != nil {
-				return err
-			}
-			if failure != nil {
-				failures = append(failures, failure)
-			}
-
-		case 'D':
-			if !opts.Recursive {
-				_ = writeFailure(out, "received a directory without -r")
-				return fmt.Errorf("%w: a directory was sent without -r", ErrProtocol)
-			}
-			h, err := parseHeader("C" + line[1:])
-			if err != nil {
-				_ = writeFailure(out, "malformed directory line")
-				return err
-			}
-			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
-			times = Header{}
-			if err := checkName(h.Name, depth, check); err != nil {
-				_ = writeFailure(out, err.Error())
-				return err
-			}
-			if err := sink.EnterDir(h); err != nil {
-				_ = writeFailure(out, failureMessage(err))
-				return err
-			}
-			depth++
-			if err := writeOK(out); err != nil {
-				return err
-			}
-
-		case 'E':
-			if depth == 0 {
-				_ = writeFailure(out, "end of a directory that was never started")
-				return fmt.Errorf("%w: unmatched end of directory", ErrProtocol)
-			}
-			depth--
-			if err := sink.LeaveDir(); err != nil {
-				_ = writeFailure(out, failureMessage(err))
-				return err
-			}
-			if err := writeOK(out); err != nil {
-				return err
-			}
-
-		default:
-			_ = writeFailure(out, "malformed control line")
-			return fmt.Errorf("%w: unexpected control line %q", ErrProtocol, line)
+		if done, err := rc.handle(strings.TrimRight(line, "\n")); done || err != nil {
+			return err
 		}
 	}
+}
+
+// receiving is the receiving end of a transfer between control lines.
+type receiving struct {
+	r     *bufio.Reader
+	out   io.Writer
+	opts  ReceiveOptions
+	sink  Sink
+	check nameCheck
+
+	times    Header // from a time line, waiting for the entry it goes with
+	depth    int    // directories entered and not yet left
+	failures []error
+}
+
+// handle acts on one control line, without its newline. done reports that the
+// transfer is over, with err as its result.
+func (rc *receiving) handle(line string) (done bool, err error) {
+	if line == "" {
+		return true, rc.refuse("malformed control line", fmt.Errorf("%w: empty control line", ErrProtocol))
+	}
+	switch line[0] {
+	case statusError, statusFatal:
+		return rc.senderFailed(line)
+	case 'T':
+		return false, rc.timeLine(line)
+	case 'C':
+		return rc.file(line)
+	case 'D':
+		return false, rc.enterDir(line)
+	case 'E':
+		return false, rc.leaveDir()
+	default:
+		return true, rc.refuse("malformed control line", fmt.Errorf("%w: unexpected control line %q", ErrProtocol, line))
+	}
+}
+
+// refuse tells the sender message and returns err, which ends the transfer.
+func (rc *receiving) refuse(message string, err error) error {
+	_ = writeFailure(rc.out, message)
+	return err
+}
+
+// end is the transfer's result once the sender has closed its side.
+func (rc *receiving) end() error {
+	if rc.depth != 0 {
+		return fmt.Errorf("%w: the sender stopped inside a directory", ErrProtocol)
+	}
+	return errors.Join(rc.failures...)
+}
+
+// senderFailed takes the sender's report of a failure of its own, such as a file
+// it could not read. The transfer carries on unless the failure was fatal.
+func (rc *receiving) senderFailed(line string) (done bool, err error) {
+	failure := &RemoteError{Message: line[1:], Fatal: line[0] == statusFatal}
+	rc.failures = append(rc.failures, failure)
+	if failure.Fatal {
+		return true, errors.Join(rc.failures...)
+	}
+	return false, nil
+}
+
+func (rc *receiving) timeLine(line string) error {
+	if err := parseTimes(line, &rc.times); err != nil {
+		return rc.refuse("malformed time line", err)
+	}
+	return writeOK(rc.out)
+}
+
+// entry reads the header of a file or directory line, with the times that came
+// ahead of it, and checks its name. malformed is what the sender is told when the
+// line does not parse.
+func (rc *receiving) entry(line, malformed string) (Header, error) {
+	h, err := parseHeader(line)
+	if err != nil {
+		return Header{}, rc.refuse(malformed, err)
+	}
+	h.ModTime, h.AccessTime = rc.times.ModTime, rc.times.AccessTime
+	rc.times = Header{}
+	if err := checkName(h.Name, rc.depth, rc.check); err != nil {
+		return Header{}, rc.refuse(err.Error(), err)
+	}
+	return h, nil
+}
+
+func (rc *receiving) file(line string) (done bool, err error) {
+	h, err := rc.entry(line, "malformed control line")
+	if err != nil {
+		return true, err
+	}
+	if rc.opts.MaxSize > 0 && h.Size > rc.opts.MaxSize {
+		// Refused before the body: the sender skips it and goes on.
+		if err := writeFailure(rc.out, h.Name+": file too large"); err != nil {
+			return true, err
+		}
+		rc.failures = append(rc.failures, fmt.Errorf("scp: %q declares %d bytes, more than the %d accepted", h.Name, h.Size, rc.opts.MaxSize))
+	} else {
+		failure, err := receiveBody(rc.r, rc.out, h, rc.sink)
+		if err != nil {
+			return true, err
+		}
+		if failure != nil {
+			rc.failures = append(rc.failures, failure)
+		}
+	}
+	if rc.opts.single {
+		return true, errors.Join(rc.failures...)
+	}
+	return false, nil
+}
+
+func (rc *receiving) enterDir(line string) error {
+	if !rc.opts.Recursive {
+		return rc.refuse("received a directory without -r", fmt.Errorf("%w: a directory was sent without -r", ErrProtocol))
+	}
+	h, err := rc.entry("C"+line[1:], "malformed directory line")
+	if err != nil {
+		return err
+	}
+	if err := rc.sink.EnterDir(h); err != nil {
+		return rc.refuse(failureMessage(err), err)
+	}
+	rc.depth++
+	return writeOK(rc.out)
+}
+
+func (rc *receiving) leaveDir() error {
+	if rc.depth == 0 {
+		return rc.refuse("end of a directory that was never started", fmt.Errorf("%w: unmatched end of directory", ErrProtocol))
+	}
+	rc.depth--
+	if err := rc.sink.LeaveDir(); err != nil {
+		return rc.refuse(failureMessage(err), err)
+	}
+	return writeOK(rc.out)
 }
 
 // receiveBody takes one file's body after its control line. It returns the file's
@@ -180,13 +220,14 @@ func receiveBody(r *bufio.Reader, out io.Writer, h Header, sink Sink) (failure, 
 	body := io.LimitReader(r, h.Size)
 	fileErr := sink.File(h, body)
 	if _, err := io.Copy(io.Discard, body); err != nil {
-		return nil, fmt.Errorf("%w: reading the body of %q: %v", ErrProtocol, h.Name, err)
+		return nil, fmt.Errorf("%w: reading the body of %q: %w", ErrProtocol, h.Name, err)
 	}
 
 	// The sender reports its own view of the file before hearing ours.
 	status, err := r.ReadByte()
 	if err != nil {
-		return nil, fmt.Errorf("%w: no status byte after %q: %v", ErrProtocol, h.Name, err)
+		// What the sink made of the file is still worth knowing.
+		return nil, errors.Join(fmt.Errorf("%w: no status byte after %q: %v", ErrProtocol, h.Name, err), fileErr)
 	}
 	if senderErr := checkStatus(r, status); senderErr != nil && fileErr == nil {
 		fileErr = senderErr
@@ -211,4 +252,28 @@ func checkName(name string, depth int, check nameCheck) error {
 		return check(name, depth)
 	}
 	return nil
+}
+
+// oneFile is a Sink for a transfer of a single file, which it hands to take.
+// Directories never reach it: without Recursive they end the transfer first.
+type oneFile struct {
+	Sink
+	take func(Header, io.Reader) error
+	got  bool
+	h    Header
+}
+
+func (s *oneFile) File(h Header, body io.Reader) error {
+	s.got, s.h = true, h
+	return s.take(h, body)
+}
+
+// receive takes the one file the sender sends, refusing it when it declares more
+// than maxSize bytes, and returns as soon as it is in.
+func (s *oneFile) receive(r *bufio.Reader, out io.Writer, maxSize int64) error {
+	err := receiveEntries(r, out, ReceiveOptions{MaxSize: maxSize, single: true}, s, nil)
+	if err == nil && !s.got {
+		err = fmt.Errorf("%w: the sender ended without sending a file", ErrProtocol)
+	}
+	return err
 }

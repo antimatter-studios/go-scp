@@ -65,14 +65,7 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 	}
 	defer sink.Close()
 
-	operands := make([]string, len(sources))
-	for i, s := range sources {
-		if c.Glob {
-			operands[i] = quotePattern(s)
-		} else {
-			operands[i] = Quote(s)
-		}
-	}
+	operands := c.remoteOperands(sources)
 	flags := "-f"
 	if c.Recursive {
 		flags = "-r " + flags
@@ -109,6 +102,20 @@ func (c *Client) nameCheck(sources []string) nameCheck {
 		}
 		return fmt.Errorf("scp: the remote sent %q, which was not asked for", name)
 	}
+}
+
+// remoteOperands quotes remote paths for the remote shell, each as one word, or,
+// with Glob, leaving their wildcards for the shell to expand.
+func (c *Client) remoteOperands(paths []string) []string {
+	operands := make([]string, len(paths))
+	for i, p := range paths {
+		if c.Glob {
+			operands[i] = quotePattern(p)
+		} else {
+			operands[i] = Quote(p)
+		}
+	}
+	return operands
 }
 
 // quotePattern quotes s for the remote shell like Quote, except for wildcards

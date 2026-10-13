@@ -19,11 +19,12 @@ go get github.com/antimatter-studios/go-scp
 import "github.com/antimatter-studios/go-scp/pkg/scp"
 ```
 
-- **Client** copies a single file to or from a remote host over an SSH connection
-  you have already dialled. The other end is the remote host's own `scp` program,
-  so nothing needs installing there and nothing runs locally but Go.
-- **Receive** and **Send** are the other end, for an SSH server that handles
-  transfers itself instead of running `scp`.
+- **Client** copies files and directories to and from a remote host over an SSH
+  connection you have already dialled, and between two remote hosts. The other
+  end is the remote host's own `scp` program, so nothing needs installing there
+  and nothing runs locally but Go.
+- **Receive**, **ReceiveAll**, **Send** and **SendFS** are the other end, for an
+  SSH server that handles transfers itself instead of running `scp`.
 
 Its only dependency is `golang.org/x/crypto`.
 
