@@ -18,6 +18,11 @@ func TestParseCommand(t *testing.T) {
 		{`scp -f 'it'\''s a dir/x' "double \"quoted\"" back\ slash`, Command{Paths: []string{"it's a dir/x", `double "quoted"`, "back slash"}, Patterns: []bool{false, false, false}}},
 		{"scp -f logs/*.txt 'quoted*.txt' a?c [ab]c", Command{Paths: []string{"logs/*.txt", "quoted*.txt", "a?c", "[ab]c"}, Patterns: []bool{true, false, true, true}}},
 		{"scp -t -- -leading-dash", Command{Sink: true, Paths: []string{"-leading-dash"}, Patterns: []bool{false}}},
+		// OpenSSH's scp client sends remote paths unquoted for the remote shell,
+		// which turns a leading ~ into the login directory, where the session starts.
+		{"scp -f ~/notes.txt ~ ~/", Command{Paths: []string{"notes.txt", ".", "."}, Patterns: []bool{false, false, false}}},
+		{"scp -t ~/logs", Command{Sink: true, Paths: []string{"logs"}, Patterns: []bool{false}}},
+		{`scp -f '~/x' a~b ~other/x \~/y`, Command{Paths: []string{"~/x", "a~b", "~other/x", "~/y"}, Patterns: []bool{false, false, false, false}}},
 	}
 	for _, c := range cases {
 		got, err := ParseCommand(c.cmd)

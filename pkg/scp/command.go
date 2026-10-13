@@ -32,8 +32,9 @@ type Command struct {
 
 // ParseCommand reads an scp command line. Quoting follows the POSIX shell, single
 // and double quotes and backslashes, since that is how a client quotes paths for
-// the remote end. Anything a shell would treat as more than one plain command,
-// such as ; | & < > or a substitution, is refused.
+// the remote end. An unquoted ~ that starts a path is the login directory, where
+// the session starts, so ~/x reads as x. Anything a shell would treat as more than
+// one plain command, such as ; | & < > or a substitution, is refused.
 func ParseCommand(cmd string) (Command, error) {
 	words, patterns, err := splitWords(cmd)
 	if err != nil {
@@ -180,6 +181,17 @@ func splitWords(cmd string) (words []string, patterns []bool, err error) {
 			}
 		case strings.IndexByte(";|&<>()$`", ch) >= 0:
 			return nil, nil, fmt.Errorf("scp: %q is more than a plain scp command", cmd)
+		case ch == '~' && !inWord && (i+1 == len(cmd) || strings.IndexByte("/ \t\n", cmd[i+1]) >= 0):
+			// An unquoted ~ that starts a word is the login directory, which is
+			// where an scp session starts, so ~/x is x and ~ is ".", as the shell
+			// would have it. OpenSSH's scp client sends such paths unquoted.
+			inWord = true
+			if i+1 < len(cmd) && cmd[i+1] == '/' {
+				i++
+			}
+			if i+1 == len(cmd) || strings.IndexByte(" \t\n", cmd[i+1]) >= 0 {
+				word.WriteByte('.')
+			}
 		default:
 			if ch == '*' || ch == '?' || ch == '[' {
 				pattern = true
