@@ -36,7 +36,7 @@ type stdio struct {
 
 // programClient returns a Client whose sessions are this test binary serving the
 // real filesystem, starting in home.
-func programClient(t *testing.T, home string) *Client {
+func programClient(t testing.TB, home string) *Client {
 	t.Helper()
 	t.Setenv(serveEnv, home)
 	return NewProgramClient(os.Args[0])

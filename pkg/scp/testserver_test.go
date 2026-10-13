@@ -29,7 +29,7 @@ type testServer struct {
 	keyPath string // the one client key it accepts, for clients to dial with
 }
 
-func newTestServer(t *testing.T, h handler) *testServer {
+func newTestServer(t testing.TB, h handler) *testServer {
 	t.Helper()
 
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
@@ -129,7 +129,7 @@ func serveSession(ch ssh.Channel, requests <-chan *ssh.Request, h handler) {
 }
 
 // dial connects a Client to s with its key.
-func (s *testServer) dial(t *testing.T) *Client {
+func (s *testServer) dial(t testing.TB) *Client {
 	t.Helper()
 	pem, err := os.ReadFile(s.keyPath)
 	if err != nil {

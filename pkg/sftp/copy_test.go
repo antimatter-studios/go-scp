@@ -13,7 +13,7 @@ var modTime = time.Unix(1_600_000_000, 0)
 
 // writeTree creates files under dir: each key a slash-separated path, each value
 // its content.
-func writeTree(t *testing.T, dir string, files map[string]string) {
+func writeTree(t testing.TB, dir string, files map[string]string) {
 	t.Helper()
 	for name, content := range files {
 		p := filepath.Join(dir, filepath.FromSlash(name))

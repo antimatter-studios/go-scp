@@ -27,6 +27,10 @@ type faults struct {
 	failWritesFrom int64 // -1 for none
 	listing        map[string][]string
 	mem            pkgsftp.Handlers
+
+	// latency delays every read, as a slow link would delay each request's
+	// answer.
+	latency time.Duration
 }
 
 func (f *faults) fails(r *pkgsftp.Request) bool {
@@ -45,7 +49,22 @@ func (f *faults) Fileread(r *pkgsftp.Request) (io.ReaderAt, error) {
 	if f.fails(r) {
 		return nil, errFault
 	}
-	return f.mem.FileGet.Fileread(r)
+	reader, err := f.mem.FileGet.Fileread(r)
+	if err != nil || f.latency == 0 {
+		return reader, err
+	}
+	return slowReaderAt{reader, f.latency}, nil
+}
+
+// slowReaderAt answers each read after a delay.
+type slowReaderAt struct {
+	io.ReaderAt
+	delay time.Duration
+}
+
+func (s slowReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	time.Sleep(s.delay)
+	return s.ReaderAt.ReadAt(p, off)
 }
 
 func (f *faults) Filewrite(r *pkgsftp.Request) (io.WriterAt, error) {
