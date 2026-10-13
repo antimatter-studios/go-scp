@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — 2026-10-13
 
 - SFTP, as `scp -s` does, in the separate module
-  `github.com/antimatter-studios/go-scp/pkg/sftp`, built on
+  `github.com/antimatter-studios/go-scp/pkg/sftp`, released as
+  `pkg/sftp/v0.1.0` and built on
   `github.com/pkg/sftp`: `sftp.Client` with `CopyTo` and `CopyFrom`,
   `NewProgramClient` for a local server program (`-D`), `Requests` and
   `BufferSize` (`-X`), and `Auto`, which falls back to the classic protocol

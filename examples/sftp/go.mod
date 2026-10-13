@@ -9,8 +9,8 @@ replace (
 )
 
 require (
-	github.com/antimatter-studios/go-scp v0.5.0
-	github.com/antimatter-studios/go-scp/pkg/sftp v0.0.0-00010101000000-000000000000
+	github.com/antimatter-studios/go-scp v0.6.0
+	github.com/antimatter-studios/go-scp/pkg/sftp v0.1.0
 )
 
 require (

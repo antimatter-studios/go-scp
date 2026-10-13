@@ -27,6 +27,7 @@ func FuzzReceiveAll(f *testing.F) {
 		"C0644 9 big\nshort",
 		"D0755 0 ..\nE\n",
 		"C0644 1 a/b\nX\x00",
+		"D0400 0 d\nC0644 1 f\nX\x00E\n", // a directory that can be listed but not entered
 	} {
 		f.Add([]byte(seed))
 	}
@@ -42,26 +43,25 @@ func FuzzReceiveAll(f *testing.F) {
 		}
 		defer sink.Close()
 
-		// With -p a sender may ask for a directory nobody can enter, mode 000;
-		// open everything up again so the test can clean up after it.
-		defer filepath.WalkDir(target, func(p string, d fs.DirEntry, err error) error {
-			if err == nil && d.IsDir() {
-				os.Chmod(p, 0o700)
-			}
-			return nil
-		})
-
 		ReceiveAll(bytes.NewReader(stream), io.Discard, ReceiveOptions{Recursive: true, MaxSize: 1 << 16}, sink)
 
 		entries, err := os.ReadDir(base)
 		if err != nil || len(entries) != 1 {
 			t.Fatalf("the target's directory holds %v (%v), want only the target", entries, err)
 		}
+		// With -p a sender may ask for directories that cannot be listed or
+		// entered; open each one before the walk goes into it, so every file is
+		// counted and the test can clean up after itself.
 		var written int64
-		filepath.WalkDir(target, func(_ string, d fs.DirEntry, err error) error {
-			if err == nil && d.Type().IsRegular() {
-				info, _ := d.Info()
-				written += info.Size()
+		filepath.WalkDir(target, func(p string, d fs.DirEntry, err error) error {
+			switch {
+			case err != nil:
+			case d.IsDir():
+				os.Chmod(p, 0o700)
+			case d.Type().IsRegular():
+				if info, err := d.Info(); err == nil {
+					written += info.Size()
+				}
 			}
 			return nil
 		})
