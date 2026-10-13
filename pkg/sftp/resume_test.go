@@ -33,6 +33,20 @@ func TestResumeContinuesPartialCopies(t *testing.T) {
 	}
 }
 
+func TestResumeCopiesAWholeFileWhenThereIsNoneYet(t *testing.T) {
+	local, remote := t.TempDir(), t.TempDir()
+	writeTree(t, local, map[string]string{"f": "0123456789"})
+	c := programClient(t, remote)
+	c.Resume = true
+
+	if err := c.CopyTo(t.Context(), remote, filepath.Join(local, "f")); err != nil {
+		t.Fatalf("CopyTo: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(remote, "f")); string(got) != "0123456789" {
+		t.Errorf("file holds %q, want all of it", got)
+	}
+}
+
 func TestResumeLeavesACompleteFileAlone(t *testing.T) {
 	remote, back := t.TempDir(), t.TempDir()
 	writeTree(t, remote, map[string]string{"f": "0123456789"})

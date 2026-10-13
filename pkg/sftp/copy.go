@@ -233,12 +233,10 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
 		defer file.Close()
-		if _, err := file.Seek(offset, io.SeekStart); err != nil {
-			return fmt.Errorf("sftp: %s: %w", remote, err), nil
-		}
-		// Read ahead by every request a file may have in flight, so they go out
-		// together rather than one per round trip.
-		body := bufio.NewReaderSize(cp.pace.reader(file), cp.readAhead())
+		// From offset on, read ahead by every request a file may have in flight,
+		// so they go out together rather than one per round trip.
+		rest := io.NewSectionReader(file, offset, h.Size-offset)
+		body := bufio.NewReaderSize(cp.pace.reader(rest), cp.readAhead())
 		if err := cp.sink.File(h, body); err != nil {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
