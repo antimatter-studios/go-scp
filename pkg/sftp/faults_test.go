@@ -156,8 +156,12 @@ func (namedFile) Sys() any           { return nil }
 
 // faultyClient returns a Client whose sessions reach f's in-memory filesystem.
 func faultyClient(f *faults) *Client {
-	h := pkgsftp.Handlers{FileGet: f, FilePut: f, FileCmd: f, FileList: f}
-	return &Client{session: func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
+	return &Client{session: pipeSession(pkgsftp.Handlers{FileGet: f, FilePut: f, FileCmd: f, FileList: f})}
+}
+
+// pipeSession starts sessions with an in-memory SFTP server that answers with h.
+func pipeSession(h pkgsftp.Handlers) func(...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
+	return func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error) {
 		clientReads, serverWrites := io.Pipe()
 		serverReads, clientWrites := io.Pipe()
 		server := pkgsftp.NewRequestServer(stdio{serverReads, serverWrites}, h)
@@ -174,7 +178,7 @@ func faultyClient(f *faults) *Client {
 			c.Close()
 			return err
 		}, nil
-	}}
+	}
 }
 
 func newFaults() *faults { return &faults{mem: pkgsftp.InMemHandler(), failWritesFrom: -1} }
