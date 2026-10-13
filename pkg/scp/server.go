@@ -147,38 +147,11 @@ func Send(in io.Reader, out io.Writer, h Header, body io.Reader) error {
 	if err := readStatus(r); err != nil {
 		return err
 	}
-	if h.hasTimes() {
-		if _, err := io.WriteString(out, h.timesLine()+"\n"); err != nil {
-			return err
-		}
-		if err := readStatus(r); err != nil {
-			return err
-		}
-	}
-	if _, err := io.WriteString(out, h.String()+"\n"); err != nil {
-		return err
-	}
-	// It accepts the header before taking the body.
-	if err := readStatus(r); err != nil {
-		return err
-	}
-
-	n, err := io.CopyN(out, body, h.Size)
+	failure, err := sender{r, out}.file(h, body, h.Name)
 	if err != nil {
-		// The peer is counting bytes: make up the promised size, then say the
-		// transfer failed, so it neither hangs nor keeps a short file as whole.
-		if _, padErr := io.CopyN(out, zeros{}, h.Size-n); padErr != nil {
-			return padErr
-		}
-		_ = writeFailure(out, "read error: "+err.Error())
 		return err
 	}
-	if err := writeOK(out); err != nil {
-		return err
-	}
-
-	// And reports whether it stored the body.
-	return readStatus(r)
+	return failure
 }
 
 // SendFailure answers a fetch that cannot be served, as "scp -f" does for a file it

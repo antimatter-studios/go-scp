@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -193,34 +194,19 @@ func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body i
 	if err := validName(h.Name); err != nil {
 		return err
 	}
+	if !c.Preserve {
+		h.ModTime, h.AccessTime = time.Time{}, time.Time{}
+	}
 	return c.run(ctx, c.command("-t", Quote(remotePath)), func(r *bufio.Reader, out io.Writer) error {
 		// The receiver is ready.
 		if err := readStatus(r); err != nil {
 			return err
 		}
-		if c.Preserve && h.hasTimes() {
-			if _, err := io.WriteString(out, h.timesLine()+"\n"); err != nil {
-				return err
-			}
-			if err := readStatus(r); err != nil {
-				return err
-			}
-		}
-		if _, err := io.WriteString(out, h.String()+"\n"); err != nil {
+		failure, err := sender{r, out}.file(h, body, remotePath)
+		if err != nil {
 			return err
 		}
-		// It has opened the file and waits for the body.
-		if err := readStatus(r); err != nil {
-			return err
-		}
-		if n, err := io.CopyN(out, body, h.Size); err != nil {
-			return fmt.Errorf("scp: reading the upload for %s after %d of %d bytes: %w", remotePath, n, h.Size, err)
-		}
-		if err := writeOK(out); err != nil {
-			return err
-		}
-		// And reports whether it stored it.
-		return readStatus(r)
+		return failure
 	})
 }
 

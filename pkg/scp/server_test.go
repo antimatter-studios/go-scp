@@ -9,9 +9,9 @@ import (
 	"testing/iotest"
 )
 
-// sender is what a sending scp puts on the wire: a control line, the body, and its
+// sentFile is what a sending scp puts on the wire for one file: a control line, the body, and its
 // own trailing status byte.
-func sender(control, body string) io.Reader {
+func sentFile(control, body string) io.Reader {
 	return strings.NewReader(control + "\n" + body + "\x00")
 }
 
@@ -20,7 +20,7 @@ func TestReceiveAcceptsAFile(t *testing.T) {
 	var got []byte
 	var header Header
 
-	err := Receive(sender("C0640 11 report.txt", "hello world"), &out, 0, func(h Header, body io.Reader) error {
+	err := Receive(sentFile("C0640 11 report.txt", "hello world"), &out, 0, func(h Header, body io.Reader) error {
 		header = h
 		var err error
 		got, err = io.ReadAll(body)
@@ -45,7 +45,7 @@ func TestReceiveTellsTheSenderWhenAcceptFails(t *testing.T) {
 	var out bytes.Buffer
 	cause := errors.New("disk full")
 
-	err := Receive(sender("C0644 5 report.txt", "abcde"), &out, 0, func(Header, io.Reader) error {
+	err := Receive(sentFile("C0644 5 report.txt", "abcde"), &out, 0, func(Header, io.Reader) error {
 		return cause
 	})
 
@@ -61,7 +61,7 @@ func TestReceiveSendsARejectionsMessageAndReturnsItsError(t *testing.T) {
 	var out bytes.Buffer
 	cause := errors.New("internal detail")
 
-	err := Receive(sender("C0644 1 report.txt", "x"), &out, 0, func(Header, io.Reader) error {
+	err := Receive(sentFile("C0644 1 report.txt", "x"), &out, 0, func(Header, io.Reader) error {
 		return &Rejection{Message: "storage unavailable", Err: cause}
 	})
 
@@ -76,7 +76,7 @@ func TestReceiveSendsARejectionsMessageAndReturnsItsError(t *testing.T) {
 func TestReceiveDrainsWhatAcceptLeavesUnread(t *testing.T) {
 	var out bytes.Buffer
 
-	err := Receive(sender("C0644 5 report.txt", "abcde"), &out, 0, func(Header, io.Reader) error {
+	err := Receive(sentFile("C0644 5 report.txt", "abcde"), &out, 0, func(Header, io.Reader) error {
 		return nil
 	})
 
@@ -89,7 +89,7 @@ func TestReceiveRefusesAFileOverMaxSize(t *testing.T) {
 	var out bytes.Buffer
 	called := false
 
-	err := Receive(sender("C0644 4096 report.txt", "x"), &out, 1024, func(Header, io.Reader) error {
+	err := Receive(sentFile("C0644 4096 report.txt", "x"), &out, 1024, func(Header, io.Reader) error {
 		called = true
 		return nil
 	})
@@ -147,7 +147,7 @@ func TestReceiveRefusesMalformedControlLines(t *testing.T) {
 func TestReceiveKeepsNamesContainingSpaces(t *testing.T) {
 	var header Header
 
-	err := Receive(sender("C0644 1 my report.txt", "x"), io.Discard, 0, func(h Header, body io.Reader) error {
+	err := Receive(sentFile("C0644 1 my report.txt", "x"), io.Discard, 0, func(h Header, body io.Reader) error {
 		header = h
 		_, err := io.ReadAll(body)
 		return err
@@ -214,7 +214,7 @@ func TestSendPadsAShortBodyAndReportsTheFailure(t *testing.T) {
 		t.Fatal("a body that fails must fail the transfer")
 	}
 	wire := out.String()
-	if !strings.HasPrefix(wire, "C0644 6 notes.txt\nabc\x00\x00\x00\x01read error: ") {
+	if !strings.HasPrefix(wire, "C0644 6 notes.txt\nabc\x00\x00\x00\x01scp: notes.txt: ") {
 		t.Errorf("wire = %q, want the promised size padded, then a failure", wire)
 	}
 }

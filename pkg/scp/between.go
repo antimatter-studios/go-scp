@@ -97,22 +97,11 @@ type forwardSink struct {
 // File sends one file. The receiving end may turn it down at its control line;
 // the file's body is then left for the caller to drain.
 func (f forwardSink) File(h Header, body io.Reader) error {
-	if err := sendTimes(f.r, f.w, h); err != nil {
+	failure, err := sender{f.r, f.w}.file(h, body, h.Name)
+	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(f.w, h.String()+"\n"); err != nil {
-		return err
-	}
-	if err := readStatus(f.r); err != nil {
-		return err
-	}
-	if _, err := io.CopyN(f.w, body, h.Size); err != nil {
-		return err
-	}
-	if err := writeOK(f.w); err != nil {
-		return err
-	}
-	return readStatus(f.r)
+	return failure
 }
 
 func (f forwardSink) EnterDir(h Header) error {
