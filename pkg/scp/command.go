@@ -89,8 +89,9 @@ func ParseCommand(cmd string) (Command, error) {
 
 // Relative returns c with every path made relative and clean: a leading / and any
 // .. that would climb above the start are dropped, so each path names something
-// under whatever root the server joins it to, and is valid in an fs.FS. An empty
-// path becomes ".".
+// under whatever root the server joins it to. An empty path becomes ".". A path
+// that is valid UTF-8 is then valid in an fs.FS; one that is not can still be used
+// through an os.Root, as DirSink does, but no fs.FS can open it.
 func (c Command) Relative() Command {
 	paths := make([]string, len(c.Paths))
 	for i, p := range c.Paths {
