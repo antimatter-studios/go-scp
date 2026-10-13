@@ -30,8 +30,12 @@ jobs:
             echo "$unformatted" >&2
             exit 1
           fi
+      # pkg/sftp is a module of its own, so ./... at the root does not reach it.
       - name: Vet
-        run: go vet ./...
+        run: |
+          set -euo pipefail
+          go vet ./...
+          (cd pkg/sftp && go vet ./...)
       # Both runners ship OpenSSH's scp, so the interoperability tests run here
       # rather than skipping.
       - name: Tests
@@ -39,7 +43,9 @@ jobs:
           set -euo pipefail
           command -v scp
           go test -race -count=1 ./...
-      # Every statement in pkg/ must be covered; the step names whatever is not.
+          (cd pkg/sftp && go test -race -count=1 ./...)
+      # Every statement in pkg/ must be covered, in both modules; the step names
+      # whatever is not.
       - name: Coverage
         run: scripts/coverage-gate.sh
 
