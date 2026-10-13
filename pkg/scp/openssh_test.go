@@ -24,29 +24,52 @@ func requireOpenSSHScp(t *testing.T) string {
 }
 
 // openSSHServer answers scp commands by starting the real scp program on them,
-// directly rather than through a shell.
+// directly rather than through a shell: the flags and paths come from ParseCommand,
+// and unquoted wildcards are expanded here, as the remote shell would.
 func openSSHServer(scp string) handler {
 	return func(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
-		flag, preserve, name, ok := scpCommand(cmd)
-		if !ok {
-			io.WriteString(stderr, "not an scp command\n")
+		c, err := ParseCommand(cmd)
+		if err != nil {
+			io.WriteString(stderr, err.Error()+"\n")
 			return 127
 		}
-		args := []string{flag, name}
-		if preserve {
-			args = []string{"-p", flag, name}
+		args := []string{}
+		for flag, on := range map[string]bool{"-r": c.Recursive, "-p": c.Preserve, "-d": c.TargetIsDir} {
+			if on {
+				args = append(args, flag)
+			}
 		}
-		c := exec.Command(scp, args...)
-		c.Stdin, c.Stdout, c.Stderr = stdin, stdout, stderr
-		err := c.Run()
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode()
+		if c.Sink {
+			args = append(args, "-t", "--")
+		} else {
+			args = append(args, "-f", "--")
 		}
+		for i, p := range c.Paths {
+			if matches, _ := filepath.Glob(p); c.Patterns[i] && len(matches) > 0 {
+				args = append(args, matches...)
+				continue
+			}
+			args = append(args, p)
+		}
+		run := exec.Command(scp, args...)
+		run.Stdout, run.Stderr = stdout, stderr
+		// sshd ends the session when scp exits. Copying the session into scp's
+		// stdin in a goroutine of our own keeps Wait from waiting on it: that copy
+		// only returns once the client closes its side, and a client fetching
+		// several files waits for this side to close first.
+		in, err := run.StdinPipe()
 		if err != nil {
 			return 127
 		}
-		return 0
+		go func() {
+			io.Copy(in, stdin)
+			in.Close()
+		}()
+		if err := run.Run(); run.ProcessState == nil {
+			io.WriteString(stderr, err.Error()+"\n")
+			return 127
+		}
+		return run.ProcessState.ExitCode()
 	}
 }
 
@@ -56,7 +79,7 @@ func TestClientAgainstOpenSSHScp(t *testing.T) {
 
 	t.Run("write then read", func(t *testing.T) {
 		name := filepath.Join(dir, "notes.txt")
-		content := []byte("line one\n\x00binary\xff'quoted' $(not run)\n")
+		content := []byte("line one\n\x00binary\xff'quoted' $HOME\n")
 		if err := c.WriteFile(t.Context(), name, content, 0o640); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}

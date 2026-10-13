@@ -26,7 +26,7 @@ func awkwardDir(t *testing.T) string {
 func TestClientRoundTripsThroughThePackagesServer(t *testing.T) {
 	c := newTestServer(t, fileServer).dial(t)
 	name := filepath.Join(awkwardDir(t), "notes.txt")
-	content := []byte("line one\n\x00binary\xff'quoted' $(not run)\n")
+	content := []byte("line one\n\x00binary\xff'quoted' $HOME\n")
 
 	if err := c.WriteFile(t.Context(), name, content, 0o640); err != nil {
 		t.Fatalf("WriteFile: %v", err)

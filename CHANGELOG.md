@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.0 — 2026-10-13
+
+- `Client.CopyTo` and `Client.CopyFrom` copy local paths to and from a remote
+  host, as the `scp` command does: several files at once, and directories with
+  `Client.Recursive` (`-r`).
+- `Client.Glob` leaves wildcards in remote sources for the remote shell.
+- `CopyFrom` accepts only the top-level names it asked for unless
+  `Client.AnyNames` is set (`-T`), and never a name with a directory part.
+- `ReceiveAll` and `SendFS` serve `scp -t` and `scp -f` for any number of files
+  and directories; a failed file is reported and the transfer carries on.
+- `DirSink` writes under one target through an `os.Root`.
+- `ParseCommand`, `Command.Relative` and `Command.Expand` read the command a
+  session asks to run.
+
 ## v0.3.0 — 2026-10-13
 
 - Every client transfer takes a context; cancelling it closes the session.
