@@ -4,7 +4,7 @@ tasks:
   test:
     desc: Run the tests with the race detector
     cmds:
-      - go test -race -count=1 ./pkg/scp/...
+      - go test -race -count=1 ./pkg/scp/... ./pkg/sftp/... ./examples/... ./test/...
 
   lint:
     desc: gofmt and vet
@@ -16,12 +16,12 @@ tasks:
           echo "$unformatted" >&2
           exit 1
         fi
-      - go vet ./pkg/scp/...
+      - go vet ./pkg/scp/... ./pkg/sftp/... ./examples/... ./test/...
 
   fuzz:
-    desc: Fuzz the control-line parser for a minute
+    desc: Fuzz every target in pkg/scp for a minute each
     cmds:
-      - go test -run '^$' -fuzz FuzzParseHeader -fuzztime 60s ./pkg/scp
+      - scripts/fuzz.sh 60s
 
   coverage:
     desc: Run the tests with coverage and print the total

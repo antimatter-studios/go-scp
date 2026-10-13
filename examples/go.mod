@@ -4,11 +4,19 @@ go 1.25.0
 
 // Built in this repository, the modules the examples show come from the same
 // commit.
-replace github.com/antimatter-studios/go-scp/pkg/scp => ../pkg/scp
-
-require (
-	github.com/antimatter-studios/go-scp/pkg/scp v0.5.0
-	golang.org/x/crypto v0.52.0
+replace (
+	github.com/antimatter-studios/go-scp/pkg/scp => ../pkg/scp
+	github.com/antimatter-studios/go-scp/pkg/sftp => ../pkg/sftp
 )
 
-require golang.org/x/sys v0.45.0 // indirect
+require (
+	github.com/antimatter-studios/go-scp/pkg/scp v0.6.0
+	github.com/antimatter-studios/go-scp/pkg/sftp v0.6.0
+	golang.org/x/crypto v0.54.0
+)
+
+require (
+	github.com/kr/fs v0.1.0 // indirect
+	github.com/pkg/sftp v1.13.11 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+)

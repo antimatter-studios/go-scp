@@ -90,7 +90,7 @@ func Receive(in io.Reader, out io.Writer, maxSize int64, accept func(Header, io.
 func receiveHeader(r *bufio.Reader, out io.Writer) (Header, string, error) {
 	var times Header
 	for {
-		line, err := r.ReadString('\n')
+		line, err := readLine(r)
 		if err != nil {
 			return Header{}, "malformed control line", fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
 		}

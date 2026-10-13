@@ -27,6 +27,26 @@ import "github.com/antimatter-studios/go-scp/pkg/scp"
 
 Its only dependency is `golang.org/x/crypto`.
 
+### SFTP
+
+Copying over SFTP, as `scp -s` does, is a module of its own, so a program that
+uses only `pkg/scp` does not depend on SFTP code:
+
+```
+go get github.com/antimatter-studios/go-scp/pkg/sftp
+```
+
+```go
+import "github.com/antimatter-studios/go-scp/pkg/sftp"
+```
+
+`sftp.Client` has the same `CopyTo` and `CopyFrom`, with `Recursive`, `Preserve`
+and `Glob`, and reaches hosts that offer only the SFTP subsystem, with no shell
+and no `scp` program. `sftp.Auto` uses SFTP when the host offers it and the
+classic protocol when it does not. It is built on
+[`github.com/pkg/sftp`](https://github.com/pkg/sftp) (BSD-2-Clause), and needs
+`golang.org/x/crypto` v0.54.0 or later.
+
 ## Client
 
 ```go
@@ -156,10 +176,11 @@ so the examples keep working as the library changes.
 
 ## Features
 
-The goal is everything OpenSSH's `scp` command does with the classic protocol.
-OpenSSH's own `scp` client now uses SFTP by default; `scp -O` still speaks the
-classic protocol, and every `scp` still answers it as the remote end. The tests
-run both halves against OpenSSH's `scp` wherever it is installed.
+The goal is everything OpenSSH's `scp` command does. OpenSSH's own `scp` client
+now uses SFTP by default; `scp -O` still speaks the classic protocol, and every
+`scp` still answers it as the remote end. `pkg/scp` is the classic protocol, and
+the tests run both of its halves against OpenSSH's `scp` wherever it is
+installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 
 ### Transfers
 
@@ -183,8 +204,12 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 | `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` | [bandwidth](examples/bandwidth/main.go) |
 | `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors | [between-hosts](examples/between-hosts/main.go) |
 | `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second | [on-host](examples/on-host/main.go) |
-| `-s`, `-D`, `-X` SFTP mode | ❌ Not supported | this library is the classic protocol only | |
-| `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression | |
+| `-A` agent forwarding | ✅ Supported | `Client.ForwardAgent`, after `agent.ForwardToAgent` on the connection; lets `-R` reach the second host with your keys | [on-host](examples/on-host/main.go) |
+| `-s` SFTP mode | ✅ Supported | `sftp.NewClient`, in the separate `pkg/sftp` module | [sftp](examples/sftp/main.go) |
+| `-D` a local SFTP server program | ✅ Supported | `sftp.NewProgramClient` | [sftp](examples/sftp/main.go) |
+| `-X` SFTP options | ✅ Supported | `sftp.Client.Requests` (`nrequests`), `sftp.Client.BufferSize` (`buffer`) | |
+| SFTP or the classic protocol, whichever the host offers | ✅ Supported | `sftp.Auto` (not an `scp` option) | [sftp](examples/sftp/main.go) |
+| `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression, and adding it there waits on partial flush in `compress/flate` ([golang/go#31514](https://github.com/golang/go/issues/31514)) | |
 
 Progress reporting needs no option: transfers stream through `io.Reader` and
 `io.Writer`, so wrap the one you pass to count bytes.
@@ -203,18 +228,23 @@ it is dialled:
 | `-c cipher` | `ssh.ClientConfig.Ciphers` |
 | `-J destination` | dial the jump host, then `Dial` through it and `ssh.NewClientConn` |
 | `-4`, `-6` | the network given to `ssh.Dial` (`tcp4`, `tcp6`) |
-| `-A` | not supported: `CopyOnHost` (`-R`) does not forward an agent, so the first host reaches the second with its own keys |
+| `-A` | `agent.ForwardToAgent(conn, keyring)` once on the connection, then `Client.ForwardAgent` |
 | `-S program` | nothing to set: no `ssh` program is run |
 | `-B` | `x/crypto/ssh` never prompts; nothing to set |
 | `-q`, `-v` | no output of its own; errors carry the detail |
 
 ## Testing
 
-Three layers, all run by CI:
+Four layers, all run by CI:
 
-- **Unit tests** (`go test ./pkg/scp/...`): both halves against each other over an
-  in-process SSH server, the wire format byte for byte, and fuzzing of the
-  control-line parser.
+- **Unit tests** (`go test ./pkg/scp/... ./pkg/sftp/...`): both halves against each other over an
+  in-process SSH server, and the wire format byte for byte.
+- **Fuzzing** (`scripts/fuzz.sh`): every part that reads what the other end
+  sends, fed arbitrary input: both ends of a transfer, the client's download,
+  the command parser and the time and header lines. Each must finish, never
+  write outside its target and never write more than arrived. The seeds and
+  every input that once failed (`pkg/scp/testdata/fuzz`) run with the unit
+  tests; CI also fuzzes each target for a short while.
 - **OpenSSH interoperability**: the client against OpenSSH's `scp` as the remote
   end, and OpenSSH's `scp -O` client against the server half. Part of the unit
   tests; they run wherever `scp` is installed.

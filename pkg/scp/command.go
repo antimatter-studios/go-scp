@@ -32,8 +32,9 @@ type Command struct {
 
 // ParseCommand reads an scp command line. Quoting follows the POSIX shell, single
 // and double quotes and backslashes, since that is how a client quotes paths for
-// the remote end. Anything a shell would treat as more than one plain command,
-// such as ; | & < > or a substitution, is refused.
+// the remote end. An unquoted ~ that starts a path is the login directory, where
+// the session starts, so ~/x reads as x. Anything a shell would treat as more than
+// one plain command, such as ; | & < > or a substitution, is refused.
 func ParseCommand(cmd string) (Command, error) {
 	words, patterns, err := splitWords(cmd)
 	if err != nil {
@@ -89,8 +90,9 @@ func ParseCommand(cmd string) (Command, error) {
 
 // Relative returns c with every path made relative and clean: a leading / and any
 // .. that would climb above the start are dropped, so each path names something
-// under whatever root the server joins it to, and is valid in an fs.FS. An empty
-// path becomes ".".
+// under whatever root the server joins it to. An empty path becomes ".". A path
+// that is valid UTF-8 is then valid in an fs.FS; one that is not can still be used
+// through an os.Root, as DirSink does, but no fs.FS can open it.
 func (c Command) Relative() Command {
 	paths := make([]string, len(c.Paths))
 	for i, p := range c.Paths {
@@ -179,6 +181,17 @@ func splitWords(cmd string) (words []string, patterns []bool, err error) {
 			}
 		case strings.IndexByte(";|&<>()$`", ch) >= 0:
 			return nil, nil, fmt.Errorf("scp: %q is more than a plain scp command", cmd)
+		case ch == '~' && !inWord && (i+1 == len(cmd) || strings.IndexByte("/ \t\n", cmd[i+1]) >= 0):
+			// An unquoted ~ that starts a word is the login directory, which is
+			// where an scp session starts, so ~/x is x and ~ is ".", as the shell
+			// would have it. OpenSSH's scp client sends such paths unquoted.
+			inWord = true
+			if i+1 < len(cmd) && cmd[i+1] == '/' {
+				i++
+			}
+			if i+1 == len(cmd) || strings.IndexByte(" \t\n", cmd[i+1]) >= 0 {
+				word.WriteByte('.')
+			}
 		default:
 			if ch == '*' || ch == '?' || ch == '[' {
 				pattern = true

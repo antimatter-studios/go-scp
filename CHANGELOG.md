@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.6.0 — 2026-10-13
+
+- SFTP, as `scp -s` does, in the separate module
+  `github.com/antimatter-studios/go-scp/pkg/sftp`, released as
+  `pkg/sftp/v0.6.0` and built on
+  `github.com/pkg/sftp`: `sftp.Client` with `CopyTo` and `CopyFrom`,
+  `NewProgramClient` for a local server program (`-D`), `Requests` and
+  `BufferSize` (`-X`), and `Auto`, which falls back to the classic protocol
+  when a host offers no SFTP.
+- Uploads over SFTP copy through plain writes, since `github.com/pkg/sftp`'s
+  `File.ReadFrom` can report a file whole when the server refused its last
+  part.
+- `Client.ForwardAgent` forwards the caller's agent, as `scp -A` does, so
+  `CopyOnHost` can reach the second host with the caller's keys.
+- Every remote command ends scp's options with `--`, so a path that starts with
+  a dash is no longer taken for an option.
+- Protocol lines are read up to 4096 bytes, so a peer that never sends a
+  newline can no longer make memory grow without end; a longer failure message
+  is cut there.
+- `DirSink` keeps only the bytes that arrived when a file body ends short,
+  instead of padding the file to its declared size, and fails that file.
+- `DirSink` holds each directory it enters open and caps paths under its target
+  at 4096 bytes, so deep nesting costs the same per level and cannot go on
+  without end.
+- `ParseCommand` reads a leading unquoted `~` as the login directory, as the
+  remote shell would for OpenSSH's scp client.
+- Fuzz targets for every part that reads what the other end sends, run briefly
+  in CI.
+
 ## v0.5.0 — 2026-10-13
 
 - `Client.Limit` caps a client transfer's rate in bytes per second, as `scp -l`

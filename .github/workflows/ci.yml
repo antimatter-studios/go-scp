@@ -30,16 +30,19 @@ jobs:
             echo "$unformatted" >&2
             exit 1
           fi
+      # Every module in go.work: the library, the SFTP module, the examples and
+      # the test network's helpers.
       - name: Vet
-        run: go vet ./pkg/scp/...
+        run: go vet ./pkg/scp/... ./pkg/sftp/... ./examples/... ./test/...
       # Both runners ship OpenSSH's scp, so the interoperability tests run here
       # rather than skipping.
       - name: Tests
         run: |
           set -euo pipefail
           command -v scp
-          go test -race -count=1 ./pkg/scp/...
-      # Every statement in pkg/ must be covered; the step names whatever is not.
+          go test -race -count=1 ./pkg/scp/... ./pkg/sftp/... ./examples/... ./test/...
+      # Every statement in pkg/ must be covered, in both modules; the step names
+      # whatever is not.
       - name: Coverage
         run: scripts/coverage-gate.sh
 
@@ -69,11 +72,24 @@ jobs:
       - name: Examples
         run: scripts/examples.sh
 
+  # Every fuzz target in pkg/scp, briefly. The test job already runs their seeds
+  # and the inputs kept under testdata/fuzz; this looks for new ones.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache: true
+      - name: Fuzz
+        run: scripts/fuzz.sh 20s
+
   # The one required check: it stands for every job above, and fails when any of
   # them failed, was cancelled or was skipped.
   ci-ok:
     if: always()
-    needs: [test, integration, examples]
+    needs: [test, integration, examples, fuzz]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
@@ -81,9 +97,10 @@ jobs:
           TEST: ${{ needs.test.result }}
           INTEGRATION: ${{ needs.integration.result }}
           EXAMPLES: ${{ needs.examples.result }}
+          FUZZ: ${{ needs.fuzz.result }}
         run: |
           failed=0
-          for job in "test:$TEST" "integration:$INTEGRATION" "examples:$EXAMPLES"; do
+          for job in "test:$TEST" "integration:$INTEGRATION" "examples:$EXAMPLES" "fuzz:$FUZZ"; do
             if [ "${job#*:}" != "success" ]; then
               echo "$job" >&2
               failed=1

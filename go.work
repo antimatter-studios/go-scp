@@ -4,6 +4,7 @@ go 1.25.0
 
 use (
 	./pkg/scp
+	./pkg/sftp
 	./examples
 	./test
 )
