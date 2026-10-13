@@ -160,11 +160,44 @@ func checkStatus(r *bufio.Reader, status byte) error {
 	}
 }
 
+// maxLine is the longest protocol line read, newline included: a control line, or
+// the message after a failure status. OpenSSH's scp reads these into a fixed buffer
+// of a few kilobytes as well. Without a limit, a peer that never sent a newline
+// would make the reader's buffer grow until memory ran out.
+const maxLine = 4096
+
+// errLineTooLong is a line that reached maxLine without ending.
+var errLineTooLong = fmt.Errorf("a line longer than %d bytes", maxLine)
+
+// readLine reads up to and including the next newline, as ReadString('\n') does,
+// but gives up with errLineTooLong once the line passes maxLine bytes.
+func readLine(r *bufio.Reader) (string, error) {
+	var line []byte
+	for {
+		part, err := r.ReadSlice('\n')
+		line = append(line, part...)
+		if len(line) > maxLine {
+			return "", errLineTooLong
+		}
+		if err != bufio.ErrBufferFull {
+			return string(line), err
+		}
+	}
+}
+
 // readMessage reads the message line after a failure status. A peer that hangs up
-// before finishing it still failed, so whatever arrived is the message.
+// before finishing it still failed, so whatever arrived is the message. A message
+// longer than maxLine is cut there, and the rest of its line is read past so the
+// stream stays in step.
 func readMessage(r *bufio.Reader) string {
-	line, _ := r.ReadString('\n')
-	return strings.TrimRight(line, "\n")
+	var msg []byte
+	for {
+		part, err := r.ReadSlice('\n')
+		msg = append(msg, part[:min(len(part), maxLine-len(msg))]...)
+		if err != bufio.ErrBufferFull {
+			return strings.TrimRight(string(msg), "\n")
+		}
+	}
 }
 
 // Quote quotes s as a single word for a POSIX shell. An SSH server hands a command

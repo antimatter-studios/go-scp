@@ -152,7 +152,7 @@ func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
 		}
 		switch kind {
 		case 'C':
-			line, err := r.ReadString('\n')
+			line, err := readLine(r)
 			if err != nil {
 				return Header{}, fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
 			}
@@ -160,7 +160,7 @@ func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
 			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
 			return h, err
 		case 'T':
-			line, err := r.ReadString('\n')
+			line, err := readLine(r)
 			if err != nil {
 				return Header{}, fmt.Errorf("%w: reading a time line: %v", ErrProtocol, err)
 			}

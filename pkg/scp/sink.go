@@ -62,7 +62,7 @@ func receiveEntries(r *bufio.Reader, out io.Writer, opts ReceiveOptions, sink Si
 	var times Header
 	depth := 0
 	for {
-		line, err := r.ReadString('\n')
+		line, err := readLine(r)
 		if err != nil {
 			if err == io.EOF && line == "" {
 				if depth != 0 {
