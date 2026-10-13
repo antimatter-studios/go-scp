@@ -141,6 +141,19 @@ When the function given to `Receive` returns an error, the peer is told the
 transfer failed, so a sender that discards its copy on success keeps it. Return a
 `*scp.Rejection` to choose the message the peer sees.
 
+## Examples
+
+Every feature has a small runnable program in [`examples/`](examples), linked
+from the table below. Each takes the host, user and key as flags and checks the
+host's key against `~/.ssh/known_hosts`:
+
+```
+go run ./examples/upload -addr host:22 -key ~/.ssh/id_ed25519 -from notes.txt -to /tmp/notes.txt
+```
+
+`scripts/examples.sh` runs all of them against the test network, and CI runs it,
+so the examples keep working as the library changes.
+
 ## Features
 
 The goal is everything OpenSSH's `scp` command does with the classic protocol.
@@ -150,28 +163,28 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 
 ### Transfers
 
-| `scp` feature | Status | Notes |
-| --- | --- | --- |
-| Copy one file to a remote host | ✅ Supported | `Client.Upload`, `Client.WriteFile` |
-| Copy one file from a remote host | ✅ Supported | `Client.Download`, `Client.ReadFile` |
-| Serve `scp -t` (receive) | ✅ Supported | `Receive` |
-| Serve `scp -f` (send) | ✅ Supported | `Send`, `SendFailure` |
-| Paths with spaces, quotes or shell characters | ✅ Supported | quoted as one word for the remote shell |
-| Remote errors in the remote's own words | ✅ Supported | `*RemoteError` |
-| Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize` (not an `scp` option) |
-| Different remote `scp` path, or `sudo scp` | ✅ Supported | `Client.Program` |
-| Cancellation with a context | ✅ Supported | every client transfer takes a `context.Context` |
-| `-p` preserve times and modes | ✅ Supported | `Client.Preserve`; `Header.ModTime`, `Header.AccessTime` on both halves |
-| `-r` recursive copy of directories | ✅ Supported | `Client.Recursive`; `ReceiveAll`, `SendFS` with `Recursive` |
-| Several files in one transfer | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`; `ReceiveAll`, `SendFS` |
-| Remote wildcards (`host:'logs/*.txt'`) | ✅ Supported | `Client.Glob`; servers expand with `Command.Expand` |
-| File name checking (`-T` to relax it) | ✅ Supported | on by default; `Client.AnyNames` relaxes it; names with a directory part are always refused |
-| Copy local paths, as the command does | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`, `DirSink` |
-| `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` |
-| `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors |
-| `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second |
-| `-s`, `-D`, `-X` SFTP mode | ❌ Not supported | this library is the classic protocol only |
-| `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression |
+| `scp` feature | Status | Notes | Example |
+| --- | --- | --- | --- |
+| Copy one file to a remote host | ✅ Supported | `Client.Upload`, `Client.WriteFile` | [upload](examples/upload/main.go) |
+| Copy one file from a remote host | ✅ Supported | `Client.Download`, `Client.ReadFile` | [download](examples/download/main.go) |
+| Serve `scp -t` (receive) | ✅ Supported | `Receive`, `ReceiveAll`, `DirSink` | [server](examples/server/main.go) |
+| Serve `scp -f` (send) | ✅ Supported | `Send`, `SendFS`, `SendFailure` | [server](examples/server/main.go) |
+| Paths with spaces, quotes or shell characters | ✅ Supported | quoted as one word for the remote shell | |
+| Remote errors in the remote's own words | ✅ Supported | `*RemoteError` | |
+| Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize` (not an `scp` option) | |
+| Different remote `scp` path, or `sudo scp` | ✅ Supported | `Client.Program` | [sudo](examples/sudo/main.go) |
+| Cancellation with a context | ✅ Supported | every client transfer takes a `context.Context` | |
+| `-p` preserve times and modes | ✅ Supported | `Client.Preserve`; `Header.ModTime`, `Header.AccessTime` on both halves | [preserve](examples/preserve/main.go) |
+| `-r` recursive copy of directories | ✅ Supported | `Client.Recursive`; `ReceiveAll`, `SendFS` with `Recursive` | [copy-tree](examples/copy-tree/main.go) |
+| Several files in one transfer | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`; `ReceiveAll`, `SendFS` | [wildcards](examples/wildcards/main.go) |
+| Remote wildcards (`host:'logs/*.txt'`) | ✅ Supported | `Client.Glob`; servers expand with `Command.Expand` | [wildcards](examples/wildcards/main.go) |
+| File name checking (`-T` to relax it) | ✅ Supported | on by default; `Client.AnyNames` relaxes it; names with a directory part are always refused | [wildcards](examples/wildcards/main.go) |
+| Copy local paths, as the command does | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`, `DirSink` | [copy-tree](examples/copy-tree/main.go) |
+| `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` | [bandwidth](examples/bandwidth/main.go) |
+| `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors | [between-hosts](examples/between-hosts/main.go) |
+| `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second | [on-host](examples/on-host/main.go) |
+| `-s`, `-D`, `-X` SFTP mode | ❌ Not supported | this library is the classic protocol only | |
+| `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression | |
 
 Progress reporting needs no option: transfers stream through `io.Reader` and
 `io.Writer`, so wrap the one you pass to count bytes.

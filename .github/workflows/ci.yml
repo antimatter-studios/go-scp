@@ -56,18 +56,31 @@ jobs:
       - name: Integration tests
         run: scripts/integration.sh -v
 
+  # Every program in examples/, run against the same test network and checked.
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Examples
+        run: scripts/examples.sh
+
   ci-ok:
     if: always()
-    needs: [test, integration]
+    needs: [test, integration, examples]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
         env:
           TEST: ${{ needs.test.result }}
           INTEGRATION: ${{ needs.integration.result }}
+          EXAMPLES: ${{ needs.examples.result }}
         run: |
           failed=0
-          for job in "test:$TEST" "integration:$INTEGRATION"; do
+          for job in "test:$TEST" "integration:$INTEGRATION" "examples:$EXAMPLES"; do
             if [ "${job#*:}" != "success" ]; then
               echo "$job" >&2
               failed=1
