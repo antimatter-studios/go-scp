@@ -13,6 +13,7 @@ func TestDownloadPaths(t *testing.T) {
 		want    error
 	}{
 		"ready cannot be sent":           {&scriptedSession{stdinFails: true}, errScripted},
+		"no reply at all":                {&scriptedSession{}, ErrProtocol},
 		"header cannot be accepted":      {&scriptedSession{stdout: "C0644 1 x\nX\x00", stdinFails: true, stdinWritesOK: 1}, errScripted},
 		"sender fails after the body":    {&scriptedSession{stdout: "C0644 1 x\nX\x01read error\n"}, nil},
 		"control line cut short":         {&scriptedSession{stdout: "C0644 1 x"}, ErrProtocol},
