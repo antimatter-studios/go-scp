@@ -60,6 +60,21 @@ Cancelling `ctx` closes the session and the transfer returns the context's error
 transferred. `Client.Program` replaces the remote command, for a host whose `scp`
 is not on the path.
 
+### Copying paths, as the command does
+
+```go
+c.Recursive = true                                          // scp -r
+err := c.CopyTo(ctx, "/srv/backup", "./project", "./notes") // scp -r project notes host:/srv/backup
+err = c.CopyFrom(ctx, "./restore", "/srv/backup/project")   // scp -r host:/srv/backup/project ./restore
+
+c.Glob = true                                               // let the remote shell expand wildcards
+err = c.CopyFrom(ctx, "./logs", "/var/log/app/*.log")
+```
+
+`CopyFrom` only accepts the top-level names it asked for, as OpenSSH's `scp`
+does; set `AnyNames` to relax that, as `scp -T` does. A name with a directory
+part is refused whatever is set, and nothing is written outside the target.
+
 ### How the remote file is written
 
 The remote `scp` writes over an existing file in place and then cuts it to the
@@ -88,6 +103,40 @@ Times a sender preserved with `-p` arrive in the header's `ModTime` and
 `AccessTime`; applying them is up to you. `Send` sends a header's times ahead of
 the file, so set them only when the peer ran `scp -p -f`.
 
+To serve the whole command as `scp` would, any number of files and directories
+included, parse it and hand it to `ReceiveAll` or `SendFS`:
+
+```go
+cmd, err := scp.ParseCommand(command) // what the session asked to run
+if err != nil {
+	return err
+}
+cmd = cmd.Relative() // every path now names something under root
+if cmd.Sink {        // scp -t: the peer sends files
+	sink, err := scp.NewDirSink(filepath.Join(root, filepath.FromSlash(cmd.Paths[0])), scp.DirSinkOptions{Preserve: cmd.Preserve})
+	if err != nil {
+		return err
+	}
+	defer sink.Close()
+	return scp.ReceiveAll(stdin, stdout, scp.ReceiveOptions{Recursive: cmd.Recursive}, sink)
+}
+dir, err := os.OpenRoot(root) // scp -f: the peer fetches files
+if err != nil {
+	return err
+}
+defer dir.Close()
+fsys := dir.FS() // confined to root, symlinks included
+names, err := cmd.Expand(fsys)
+if err != nil {
+	return err
+}
+return scp.SendFS(stdin, stdout, fsys, names, scp.SendOptions{Recursive: cmd.Recursive, Preserve: cmd.Preserve})
+```
+
+`ParseCommand` refuses anything a shell would run as more than one plain `scp`
+command. `Relative` keeps every requested path under your root; `DirSink` and
+`os.Root.FS` keep every read and write there too, through symlinks as well.
+
 When the function given to `Receive` returns an error, the peer is told the
 transfer failed, so a sender that discards its copy on success keeps it. Return a
 `*scp.Rejection` to choose the message the peer sees.
@@ -113,11 +162,11 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 | Different remote `scp` path, or `sudo scp` | ✅ Supported | `Client.Program` |
 | Cancellation with a context | ✅ Supported | every client transfer takes a `context.Context` |
 | `-p` preserve times and modes | ✅ Supported | `Client.Preserve`; `Header.ModTime`, `Header.AccessTime` on both halves |
-| `-r` recursive copy of directories | 🚧 Planned | client and server |
-| Several files in one transfer | 🚧 Planned | `scp a b host:dir/` |
-| Remote wildcards (`host:'logs/*.txt'`) | 🚧 Planned | |
-| File name checking (`-T` to relax it) | 🚧 Planned | a remote may only send the names that were asked for |
-| Copy local paths, as the command does | 🚧 Planned | on top of the stream API |
+| `-r` recursive copy of directories | ✅ Supported | `Client.Recursive`; `ReceiveAll`, `SendFS` with `Recursive` |
+| Several files in one transfer | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`; `ReceiveAll`, `SendFS` |
+| Remote wildcards (`host:'logs/*.txt'`) | ✅ Supported | `Client.Glob`; servers expand with `Command.Expand` |
+| File name checking (`-T` to relax it) | ✅ Supported | on by default; `Client.AnyNames` relaxes it; names with a directory part are always refused |
+| Copy local paths, as the command does | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`, `DirSink` |
 | `-l` bandwidth limit | 🚧 Planned | |
 | `-3` remote to remote, through this host | 🚧 Planned | two connections, piped |
 | `-R` remote to remote, run on the first host | 🚧 Planned | |
