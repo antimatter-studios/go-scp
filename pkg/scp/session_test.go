@@ -18,15 +18,36 @@ type scriptedSession struct {
 	stderr  string
 	waitErr error
 	onWait  func()
+
+	// stdinFails makes the session's stdin fail once stdinWritesOK writes have
+	// gone through.
+	stdinFails    bool
+	stdinWritesOK int
 }
 
 type discardCloser struct{ io.Writer }
 
 func (discardCloser) Close() error { return nil }
 
+// failingStdin accepts ok writes, then fails every one after.
+type failingStdin struct{ ok int }
+
+func (f *failingStdin) Write(p []byte) (int, error) {
+	if f.ok == 0 {
+		return 0, errScripted
+	}
+	f.ok--
+	return len(p), nil
+}
+
+func (f *failingStdin) Close() error { return nil }
+
 func (s *scriptedSession) StdinPipe() (io.WriteCloser, error) {
 	if s.fail == "stdin" {
 		return nil, errScripted
+	}
+	if s.stdinFails {
+		return &failingStdin{ok: s.stdinWritesOK}, nil
 	}
 	return discardCloser{io.Discard}, nil
 }
