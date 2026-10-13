@@ -363,3 +363,11 @@ func TestServerTreeAgainstOpenSSHScpClient(t *testing.T) {
 		t.Errorf("round trip = %v\nwant %v", got, tree)
 	}
 }
+
+func TestCopyFromNeedsTheTargetsDirectory(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "missing", "x")
+
+	if err := scripted().CopyFrom(t.Context(), target, "/x"); err == nil {
+		t.Error("a target whose directory does not exist: want an error")
+	}
+}

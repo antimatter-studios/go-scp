@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // proc is an scp started on a session of its own, with its input and output open
 // for whoever drives it.
 type proc struct {
-	sess   *ssh.Session
+	sess   session
 	stdin  io.WriteCloser
 	stdout io.Reader
 
@@ -24,7 +22,7 @@ type proc struct {
 
 // start runs command on a new session. Cancelling ctx closes the session.
 func (c *Client) start(ctx context.Context, command string) (*proc, error) {
-	sess, err := c.conn.NewSession()
+	sess, err := c.newSession()
 	if err != nil {
 		return nil, err
 	}

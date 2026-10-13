@@ -203,7 +203,7 @@ it is dialled:
 | `-c cipher` | `ssh.ClientConfig.Ciphers` |
 | `-J destination` | dial the jump host, then `Dial` through it and `ssh.NewClientConn` |
 | `-4`, `-6` | the network given to `ssh.Dial` (`tcp4`, `tcp6`) |
-| `-A` | not needed for a copy; it matters only for `-R`, which is planned |
+| `-A` | not supported: `CopyOnHost` (`-R`) does not forward an agent, so the first host reaches the second with its own keys |
 | `-S program` | nothing to set: no `ssh` program is run |
 | `-B` | `x/crypto/ssh` never prompts; nothing to set |
 | `-q`, `-v` | no output of its own; errors carry the detail |
@@ -222,6 +222,9 @@ Three layers, all run by CI:
   containers on one network (`test/network`). Every remote command goes through
   a real login shell, so quoting, wildcards and `sudo scp` are tested as they
   run in production.
+
+CI also fails unless the tests cover every statement in `pkg/`
+(`scripts/coverage-gate.sh`), naming whatever they miss.
 
 ## License
 
