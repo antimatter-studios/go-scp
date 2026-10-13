@@ -33,6 +33,20 @@ type Client struct {
 	// header's times and the remote reapplies the mode to an existing file; a
 	// download returns the remote file's times in its header.
 	Preserve bool
+
+	// Recursive lets CopyTo and CopyFrom copy directories with their contents, as
+	// "scp -r" does.
+	Recursive bool
+
+	// Glob lets the remote sources given to CopyFrom hold wildcards (*, ? and
+	// [...]) for the remote shell to expand, as scp's remote paths do. The rest of
+	// each source stays quoted.
+	Glob bool
+
+	// AnyNames lets CopyFrom accept top-level names other than the ones asked
+	// for, as "scp -T" does. A name that could reach outside the target is refused
+	// whatever this says.
+	AnyNames bool
 }
 
 // NewClient returns a Client that makes its transfers over conn. Verifying the
