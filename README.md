@@ -183,8 +183,9 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 | `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` | [bandwidth](examples/bandwidth/main.go) |
 | `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors | [between-hosts](examples/between-hosts/main.go) |
 | `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second | [on-host](examples/on-host/main.go) |
+| `-A` agent forwarding | ✅ Supported | `Client.ForwardAgent`, after `agent.ForwardToAgent` on the connection; lets `-R` reach the second host with your keys | [on-host](examples/on-host/main.go) |
 | `-s`, `-D`, `-X` SFTP mode | ❌ Not supported | this library is the classic protocol only | |
-| `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression | |
+| `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression, and adding it there waits on partial flush in `compress/flate` ([golang/go#31514](https://github.com/golang/go/issues/31514)) | |
 
 Progress reporting needs no option: transfers stream through `io.Reader` and
 `io.Writer`, so wrap the one you pass to count bytes.
@@ -203,7 +204,7 @@ it is dialled:
 | `-c cipher` | `ssh.ClientConfig.Ciphers` |
 | `-J destination` | dial the jump host, then `Dial` through it and `ssh.NewClientConn` |
 | `-4`, `-6` | the network given to `ssh.Dial` (`tcp4`, `tcp6`) |
-| `-A` | not supported: `CopyOnHost` (`-R`) does not forward an agent, so the first host reaches the second with its own keys |
+| `-A` | `agent.ForwardToAgent(conn, keyring)` once on the connection, then `Client.ForwardAgent` |
 | `-S program` | nothing to set: no `ssh` program is run |
 | `-B` | `x/crypto/ssh` never prompts; nothing to set |
 | `-q`, `-v` | no output of its own; errors carry the detail |
