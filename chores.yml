@@ -19,9 +19,9 @@ tasks:
       - go vet ./...
 
   fuzz:
-    desc: Fuzz the control-line parser for a minute
+    desc: Fuzz every target in pkg/scp for a minute each
     cmds:
-      - go test -run '^$' -fuzz FuzzParseHeader -fuzztime 60s ./pkg/scp
+      - scripts/fuzz.sh 60s
 
   coverage:
     desc: Run the tests with coverage and print the total
