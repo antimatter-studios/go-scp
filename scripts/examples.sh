@@ -80,6 +80,16 @@ step on-host
 "$bin/download" "${b[@]}" -from /tmp/project/src/main.go -to "$work/onhost.main.go"
 same "$work/project/src/main.go" "$work/onhost.main.go"
 
+step on-host -forward-agent
+keyless=(-addr "127.0.0.1:$HOST_A_PORT" -user keyless -key "$key" -insecure)
+"$bin/upload" "${keyless[@]}" -from "$work/notes.txt" -to /home/keyless/notes.txt
+# keyless holds no key on host-a, so the copy reaches host-b with the key in an
+# agent that lives only as long as the example.
+ssh-agent sh -c 'ssh-add -q "$1" && shift && exec "$@"' _ "$key" \
+	"$bin/on-host" "${keyless[@]}" -forward-agent -from /home/keyless/notes.txt -to host-b:/tmp/agent.notes.txt
+"$bin/download" "${b[@]}" -from /tmp/agent.notes.txt -to "$work/agent.notes.txt"
+same "$work/notes.txt" "$work/agent.notes.txt"
+
 step server
 mkdir -p "$work/serverkey" "$work/share"
 go run ./test/network/keygen "$work/serverkey"

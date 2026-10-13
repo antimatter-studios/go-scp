@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 func integrationEnv(t *testing.T, name string) string {
@@ -30,19 +31,36 @@ func integrationEnv(t *testing.T, name string) string {
 	return v
 }
 
-// dialHost connects to one of the test hosts as the tester user.
-func dialHost(t *testing.T, addrEnv string) *ssh.Client {
+// testKey returns the test network's private key, which every test user logs in
+// with.
+func testKey(t *testing.T) any {
 	t.Helper()
 	pem, err := os.ReadFile(integrationEnv(t, "GOSCP_KEY"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := ssh.ParsePrivateKey(pem)
+	key, err := ssh.ParseRawPrivateKey(pem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// dialHost connects to one of the test hosts as the tester user.
+func dialHost(t *testing.T, addrEnv string) *ssh.Client {
+	t.Helper()
+	return dialHostAs(t, addrEnv, "tester")
+}
+
+// dialHostAs connects to one of the test hosts as user.
+func dialHostAs(t *testing.T, addrEnv, user string) *ssh.Client {
+	t.Helper()
+	signer, err := ssh.NewSignerFromKey(testKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	conn, err := ssh.Dial("tcp", integrationEnv(t, addrEnv), &ssh.ClientConfig{
-		User:            "tester",
+		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // throwaway containers with fresh host keys
 		Timeout:         10 * time.Second,
@@ -75,7 +93,7 @@ func remoteDir(t *testing.T, conn *ssh.Client) string {
 	t.Helper()
 	suffix := make([]byte, 4)
 	rand.Read(suffix)
-	dir := "/home/tester/" + strings.ReplaceAll(t.Name(), "/", "_") + "-" + hex.EncodeToString(suffix)
+	dir := "/home/" + conn.User() + "/" + strings.ReplaceAll(t.Name(), "/", "_") + "-" + hex.EncodeToString(suffix)
 	runRemote(t, conn, "mkdir -p "+Quote(dir))
 	t.Cleanup(func() { runRemote(t, conn, "rm -rf "+Quote(dir)) })
 	return dir
@@ -243,5 +261,33 @@ func TestIntegrationCopyBetweenHostsOnTheFirst(t *testing.T) {
 	}
 	if got := readTree(t, back); !reflect.DeepEqual(got, tree) {
 		t.Errorf("host-b holds %v\nwant %v", got, tree)
+	}
+}
+
+func TestIntegrationCopyOnHostForwardsTheAgent(t *testing.T) {
+	// keyless has no private key on host-a, so it can log in to host-b only with
+	// the caller's key, through a forwarded agent.
+	connA, connB := dialHostAs(t, "GOSCP_HOST_A", "keyless"), dialHost(t, "GOSCP_HOST_B")
+	onA, onB := remoteDir(t, connA), remoteDir(t, connB)
+	runRemote(t, connA, "printf forwarded > "+Quote(onA+"/note.txt"))
+	c := NewClient(connA)
+
+	if err := c.CopyOnHost(t.Context(), "host-b:"+onB, onA+"/note.txt"); err == nil {
+		t.Fatal("CopyOnHost without an agent: want an error, as keyless has no key of its own")
+	}
+
+	keyring := agent.NewKeyring()
+	if err := keyring.Add(agent.AddedKey{PrivateKey: testKey(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.ForwardToAgent(connA, keyring); err != nil {
+		t.Fatal(err)
+	}
+	c.ForwardAgent = true
+	if err := c.CopyOnHost(t.Context(), "host-b:"+onB, onA+"/note.txt"); err != nil {
+		t.Fatalf("CopyOnHost with the agent: %v", err)
+	}
+	if got := runRemote(t, connB, "cat "+Quote(onB+"/note.txt")); got != "forwarded" {
+		t.Errorf("host-b holds %q", got)
 	}
 }

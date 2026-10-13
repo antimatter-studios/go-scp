@@ -22,7 +22,7 @@ type proc struct {
 
 // start runs command on a new session. Cancelling ctx closes the session.
 func (c *Client) start(ctx context.Context, command string) (*proc, error) {
-	sess, err := c.newSession()
+	sess, err := c.openSession()
 	if err != nil {
 		return nil, err
 	}

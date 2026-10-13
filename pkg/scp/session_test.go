@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -13,7 +14,7 @@ var errScripted = errors.New("scripted failure")
 // scriptedSession stands in for an SSH session. fail names the step that fails;
 // stdout is what the remote scp says; onWait runs as the session is waited on.
 type scriptedSession struct {
-	fail    string // "stdin", "stdout", "stderr" or "start"
+	fail    string // "request", "stdin", "stdout", "stderr" or "start"
 	stdout  string
 	stderr  string
 	waitErr error
@@ -23,6 +24,11 @@ type scriptedSession struct {
 	// gone through.
 	stdinFails    bool
 	stdinWritesOK int
+
+	// refuseRequests answers every request with a refusal; requests records the
+	// names of those sent.
+	refuseRequests bool
+	requests       []string
 }
 
 type discardCloser struct{ io.Writer }
@@ -41,6 +47,14 @@ func (f *failingStdin) Write(p []byte) (int, error) {
 }
 
 func (f *failingStdin) Close() error { return nil }
+
+func (s *scriptedSession) SendRequest(name string, _ bool, _ []byte) (bool, error) {
+	s.requests = append(s.requests, name)
+	if s.fail == "request" {
+		return false, errScripted
+	}
+	return !s.refuseRequests, nil
+}
 
 func (s *scriptedSession) StdinPipe() (io.WriteCloser, error) {
 	if s.fail == "stdin" {
@@ -194,5 +208,53 @@ func TestAFailureWithOnlyStderrIsTheStderr(t *testing.T) {
 
 	if err := p.failure("copy", nil); err == nil || err.Error() != "scp: copy: scp: /x: No such file or directory" {
 		t.Errorf("failure = %v", err)
+	}
+}
+
+func TestForwardAgentAsksEverySessionBeforeItStarts(t *testing.T) {
+	download := &scriptedSession{stdout: "C0644 1 x\nX\x00"}
+	copyOnHost := &scriptedSession{}
+	c := scripted(download, copyOnHost)
+	c.ForwardAgent = true
+
+	if _, err := c.ReadFile(t.Context(), "/x"); err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if err := c.CopyOnHost(t.Context(), "b:/x", "/x"); err != nil {
+		t.Fatalf("CopyOnHost: %v", err)
+	}
+	for name, s := range map[string]*scriptedSession{"download": download, "CopyOnHost": copyOnHost} {
+		if !reflect.DeepEqual(s.requests, []string{"auth-agent-req@openssh.com"}) {
+			t.Errorf("%s sent %q", name, s.requests)
+		}
+	}
+}
+
+func TestNoAgentIsAskedForUnlessForwardAgentIsSet(t *testing.T) {
+	s := &scriptedSession{stdout: "C0644 1 x\nX\x00"}
+
+	if _, err := scripted(s).ReadFile(t.Context(), "/x"); err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(s.requests) != 0 {
+		t.Errorf("sent %q", s.requests)
+	}
+}
+
+func TestAgentForwardingThatFailsEndsTheTransfer(t *testing.T) {
+	for name, s := range map[string]func() *scriptedSession{
+		"refused":       func() *scriptedSession { return &scriptedSession{refuseRequests: true} },
+		"request fails": func() *scriptedSession { return &scriptedSession{fail: "request"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := scripted(s(), s())
+			c.ForwardAgent = true
+			if _, err := c.ReadFile(t.Context(), "/x"); err == nil {
+				t.Error("ReadFile: want an error")
+			}
+			if err := c.CopyOnHost(t.Context(), "b:/x", "/x"); err == nil {
+				t.Error("CopyOnHost: want an error")
+			}
+		})
 	}
 }
