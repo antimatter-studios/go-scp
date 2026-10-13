@@ -167,7 +167,7 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 | Remote wildcards (`host:'logs/*.txt'`) | ✅ Supported | `Client.Glob`; servers expand with `Command.Expand` |
 | File name checking (`-T` to relax it) | ✅ Supported | on by default; `Client.AnyNames` relaxes it; names with a directory part are always refused |
 | Copy local paths, as the command does | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`, `DirSink` |
-| `-l` bandwidth limit | 🚧 Planned | |
+| `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` |
 | `-3` remote to remote, through this host | 🚧 Planned | two connections, piped |
 | `-R` remote to remote, run on the first host | 🚧 Planned | |
 | `-s`, `-D`, `-X` SFTP mode | ❌ Not supported | this library is the classic protocol only |
