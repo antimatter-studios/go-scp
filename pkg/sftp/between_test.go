@@ -96,7 +96,7 @@ func TestCopyBetweenReportsADirectoryThatCannotBeFinished(t *testing.T) {
 
 func TestWritingAFileReportsABodyThatEndsShort(t *testing.T) {
 	err := faultyClient(newFaults()).with(t.Context(), func(conn *pkgsftp.Client) error {
-		return remoteWriter{conn: conn}.writeFile("/f", scp.Header{Mode: 0o644, Size: 10}, strings.NewReader("short"))
+		return remoteWriter{conn: conn}.writeFile("/f", scp.Header{Mode: 0o644, Size: 10}, strings.NewReader("short"), 0)
 	})
 	if err == nil || !strings.Contains(err.Error(), "only 5 of 10 bytes") {
 		t.Errorf("writeFile = %v, want the short body reported", err)

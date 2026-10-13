@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `sftp.Client.Resume` continues a file a copy left part-way, both ways, as
+  sftp's `reget` and `reput` do; `DirSinkOptions.Resume` and
+  `DirSink.ResumeFrom` let a sender that can start part-way write only the rest.
 - SFTP downloads ask for a whole read-ahead at once, `Requests` packets of
   `BufferSize` bytes, so that many reads are in flight together: a download
   over a link with 1 ms of latency went from 24 to 192 MB/s in the benchmark.

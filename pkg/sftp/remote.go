@@ -21,6 +21,7 @@ const defaultUmask = 0o022
 type remoteWriter struct {
 	conn     *pkgsftp.Client
 	preserve bool
+	resume   bool
 }
 
 // writeFile writes h.Size bytes of body to path, in place over an existing file,
@@ -29,10 +30,17 @@ type remoteWriter struct {
 // creates it with a mode of its own choosing, which may let others read it. With
 // preserve the file takes h's mode and times exactly. A body that ends sooner fails
 // the file.
-func (w remoteWriter) writeFile(path string, h scp.Header, body io.Reader) error {
+//
+// From offset on, as resumeFrom gives it, the file is continued rather than
+// written over: body holds the rest of the file, from offset on.
+func (w remoteWriter) writeFile(path string, h scp.Header, body io.Reader, offset int64) error {
 	_, statErr := w.conn.Stat(path)
 	created := errors.Is(statErr, fs.ErrNotExist)
-	out, err := w.conn.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if offset > 0 {
+		flags = os.O_WRONLY
+	}
+	out, err := w.conn.OpenFile(path, flags)
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", path, err)
 	}
@@ -47,9 +55,11 @@ func (w remoteWriter) writeFile(path string, h scp.Header, body io.Reader) error
 		// drops the error of a write that ends the file part-way through a packet,
 		// and reports the copy whole.
 		var n int64
-		n, err = io.CopyN(struct{ io.Writer }{out}, body, h.Size)
+		if _, err = out.Seek(offset, io.SeekStart); err == nil {
+			n, err = io.CopyN(struct{ io.Writer }{out}, body, h.Size-offset)
+		}
 		if err == io.EOF {
-			err = fmt.Errorf("only %d of %d bytes arrived", n, h.Size)
+			err = fmt.Errorf("only %d of %d bytes arrived", offset+n, h.Size)
 		}
 	}
 	if closeErr := out.Close(); err == nil {
@@ -62,6 +72,26 @@ func (w remoteWriter) writeFile(path string, h scp.Header, body io.Reader) error
 		return fmt.Errorf("sftp: %s: %w", path, err)
 	}
 	return nil
+}
+
+// resumeFrom is where a copy of the file h describes continues at path: the size
+// of the file there when resuming, and 0 when not resuming or when there is none.
+// A file there that is longer than h.Size is not resumed, and is an error.
+func (w remoteWriter) resumeFrom(path string, h scp.Header) (int64, error) {
+	if !w.resume {
+		return 0, nil
+	}
+	info, err := w.conn.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("sftp: %s: %w", path, err)
+	case info.Size() > h.Size:
+		return 0, fmt.Errorf("sftp: %s: %d bytes there, more than the %d being copied; not resuming", path, info.Size(), h.Size)
+	default:
+		return info.Size(), nil
+	}
 }
 
 // openDir makes the directory at path unless it exists, and reports whether it
