@@ -15,6 +15,19 @@ import (
 	pkgsftp "github.com/pkg/sftp"
 )
 
+// copying is one copy in progress: the client's settings, the SFTP session it runs
+// over, the pace it keeps, and, for a copy from the remote host, where it writes.
+type copying struct {
+	*Client
+	conn *pkgsftp.Client
+	pace *pacer
+	sink scp.Sink
+}
+
+func (c *Client) copying(conn *pkgsftp.Client, sink scp.Sink) *copying {
+	return &copying{Client: c, conn: conn, pace: newPacer(c.Limit), sink: sink}
+}
+
 // CopyTo copies local files to target on the remote host, as
 // "scp -s [-r] [-p] source... host:target" does. With Recursive a source may be a
 // directory, copied with its contents. With more than one source, target must be
@@ -31,8 +44,9 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 		return errors.New("sftp: no sources to copy")
 	}
 	target = remotePath(target)
-	return c.with(ctx, func(client *pkgsftp.Client) error {
-		info, err := client.Stat(target)
+	return c.with(ctx, func(conn *pkgsftp.Client) error {
+		cp := c.copying(conn, nil)
+		info, err := conn.Stat(target)
 		intoDir := err == nil && info.IsDir()
 		if len(sources) > 1 && !intoDir {
 			return fmt.Errorf("sftp: %s: must be an existing directory to take several files", target)
@@ -44,7 +58,7 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 			if intoDir {
 				remote = path.Join(target, filepath.Base(src))
 			}
-			if err := c.put(client, src, remote); err != nil {
+			if err := cp.put(src, remote); err != nil {
 				failures = append(failures, err)
 			}
 		}
@@ -53,37 +67,37 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 }
 
 // put copies one local file or directory to remote.
-func (c *Client) put(client *pkgsftp.Client, local, remote string) error {
+func (cp *copying) put(local, remote string) error {
 	info, err := os.Stat(local)
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
 	}
 	switch {
-	case info.IsDir() && c.Recursive:
-		return c.putDir(client, local, remote, info)
+	case info.IsDir() && cp.Recursive:
+		return cp.putDir(local, remote, info)
 	case info.Mode().IsRegular():
-		return c.putFile(client, local, remote, info)
+		return cp.putFile(local, remote, info)
 	default:
 		return fmt.Errorf("sftp: %s: not a regular file", local)
 	}
 }
 
-func (c *Client) putFile(client *pkgsftp.Client, local, remote string, info fs.FileInfo) error {
+func (cp *copying) putFile(local, remote string, info fs.FileInfo) error {
 	in, err := os.Open(local)
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
 	}
 	defer in.Close()
-	_, statErr := client.Stat(remote)
+	_, statErr := cp.conn.Stat(remote)
 	created := errors.Is(statErr, fs.ErrNotExist)
-	out, err := client.OpenFile(remote, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	out, err := cp.conn.OpenFile(remote, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err)
 	}
 	// The server creates a file with a mode of its own choosing, which may let
 	// others read it, so its mode is set before any of it is written.
 	switch {
-	case c.Preserve:
+	case cp.Preserve:
 		err = out.Chmod(info.Mode().Perm())
 	case created:
 		err = out.Chmod(info.Mode().Perm() &^ 0o022)
@@ -92,13 +106,13 @@ func (c *Client) putFile(client *pkgsftp.Client, local, remote string, info fs.F
 		// Copied through plain Write calls: github.com/pkg/sftp's File.ReadFrom
 		// drops the error of a write that ends the file part-way through a packet,
 		// and reports the copy whole.
-		_, err = io.Copy(struct{ io.Writer }{out}, struct{ io.Reader }{in})
+		_, err = io.Copy(struct{ io.Writer }{out}, cp.pace.reader(in))
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}
-	if err == nil && c.Preserve {
-		err = client.Chtimes(remote, info.ModTime(), info.ModTime())
+	if err == nil && cp.Preserve {
+		err = cp.conn.Chtimes(remote, info.ModTime(), info.ModTime())
 	}
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err)
@@ -106,18 +120,18 @@ func (c *Client) putFile(client *pkgsftp.Client, local, remote string, info fs.F
 	return nil
 }
 
-func (c *Client) putDir(client *pkgsftp.Client, local, remote string, info fs.FileInfo) error {
+func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
 	entries, err := os.ReadDir(local)
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
 	}
-	existing, err := client.Stat(remote)
+	existing, err := cp.conn.Stat(remote)
 	created := errors.Is(err, fs.ErrNotExist)
 	switch {
 	case err == nil && !existing.IsDir():
 		return fmt.Errorf("sftp: %s: not a directory", remote)
 	case created:
-		err = client.Mkdir(remote)
+		err = cp.conn.Mkdir(remote)
 	}
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err)
@@ -125,7 +139,7 @@ func (c *Client) putDir(client *pkgsftp.Client, local, remote string, info fs.Fi
 
 	var failures []error
 	for _, e := range entries {
-		if err := c.put(client, filepath.Join(local, e.Name()), path.Join(remote, e.Name())); err != nil {
+		if err := cp.put(filepath.Join(local, e.Name()), path.Join(remote, e.Name())); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -133,13 +147,13 @@ func (c *Client) putDir(client *pkgsftp.Client, local, remote string, info fs.Fi
 	// The mode is set once the entries are in, so a directory without write
 	// permission still takes them.
 	switch {
-	case c.Preserve:
-		err = client.Chmod(remote, info.Mode().Perm())
+	case cp.Preserve:
+		err = cp.conn.Chmod(remote, info.Mode().Perm())
 		if err == nil {
-			err = client.Chtimes(remote, info.ModTime(), info.ModTime())
+			err = cp.conn.Chtimes(remote, info.ModTime(), info.ModTime())
 		}
 	case created:
-		err = client.Chmod(remote, info.Mode().Perm()&^0o022)
+		err = cp.conn.Chmod(remote, info.Mode().Perm()&^0o022)
 	}
 	if err != nil {
 		failures = append(failures, fmt.Errorf("sftp: %s: %w", remote, err))
@@ -170,16 +184,17 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 	}
 	defer sink.Close()
 
-	return c.with(ctx, func(client *pkgsftp.Client) error {
+	return c.with(ctx, func(conn *pkgsftp.Client) error {
+		cp := c.copying(conn, sink)
 		var failures []error
 		for _, src := range sources {
-			names, err := c.expand(client, remotePath(src))
+			names, err := cp.expand(remotePath(src))
 			if err != nil {
 				failures = append(failures, err)
 				continue
 			}
 			for _, name := range names {
-				failure, err := c.fetch(client, sink, name)
+				failure, err := cp.fetch(name)
 				if err != nil {
 					return errors.Join(append(failures, err)...)
 				}
@@ -193,11 +208,11 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 }
 
 // expand returns the remote paths src names: itself or, with Glob, its matches.
-func (c *Client) expand(client *pkgsftp.Client, src string) ([]string, error) {
-	if !c.Glob {
+func (cp *copying) expand(src string) ([]string, error) {
+	if !cp.Glob {
 		return []string{src}, nil
 	}
-	matches, err := client.Glob(src)
+	matches, err := cp.conn.Glob(src)
 	if err == nil && len(matches) == 0 {
 		err = fs.ErrNotExist
 	}
@@ -207,15 +222,15 @@ func (c *Client) expand(client *pkgsftp.Client, src string) ([]string, error) {
 	return matches, nil
 }
 
-// fetch copies one remote file or directory into sink. It returns the entry's own
-// failure, which the copy survives, separately from an error that ends it.
-func (c *Client) fetch(client *pkgsftp.Client, sink scp.Sink, remote string) (failure, err error) {
-	info, err := client.Stat(remote)
+// fetch copies one remote file or directory into the sink. It returns the entry's
+// own failure, which the copy survives, separately from an error that ends it.
+func (cp *copying) fetch(remote string) (failure, err error) {
+	info, err := cp.conn.Stat(remote)
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err), nil
 	}
 	h := scp.Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: path.Base(remote)}
-	if c.Preserve {
+	if cp.Preserve {
 		h.ModTime, h.AccessTime = info.ModTime(), info.ModTime()
 	}
 	if err := validName(h.Name); err != nil {
@@ -223,15 +238,18 @@ func (c *Client) fetch(client *pkgsftp.Client, sink scp.Sink, remote string) (fa
 	}
 
 	switch {
-	case info.IsDir() && c.Recursive:
-		return c.fetchDir(client, sink, remote, h)
+	case info.IsDir() && cp.Recursive:
+		return cp.fetchDir(remote, h)
 	case info.Mode().IsRegular():
-		file, err := client.Open(remote)
+		if cp.MaxSize > 0 && h.Size > cp.MaxSize {
+			return fmt.Errorf("sftp: %s is %d bytes, more than the %d this client accepts", remote, h.Size, cp.MaxSize), nil
+		}
+		file, err := cp.conn.Open(remote)
 		if err != nil {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
 		defer file.Close()
-		if err := sink.File(h, file); err != nil {
+		if err := cp.sink.File(h, cp.pace.reader(file)); err != nil {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
 		return nil, nil
@@ -240,12 +258,12 @@ func (c *Client) fetch(client *pkgsftp.Client, sink scp.Sink, remote string) (fa
 	}
 }
 
-func (c *Client) fetchDir(client *pkgsftp.Client, sink scp.Sink, remote string, h scp.Header) (failure, err error) {
-	entries, err := client.ReadDir(remote)
+func (cp *copying) fetchDir(remote string, h scp.Header) (failure, err error) {
+	entries, err := cp.conn.ReadDir(remote)
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err), nil
 	}
-	if err := sink.EnterDir(h); err != nil {
+	if err := cp.sink.EnterDir(h); err != nil {
 		return nil, err
 	}
 	var failures []error
@@ -256,7 +274,7 @@ func (c *Client) fetchDir(client *pkgsftp.Client, sink scp.Sink, remote string, 
 			failures = append(failures, fmt.Errorf("sftp: %s: the server listed %w", remote, err))
 			continue
 		}
-		entryFailure, err := c.fetch(client, sink, path.Join(remote, e.Name()))
+		entryFailure, err := cp.fetch(path.Join(remote, e.Name()))
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +282,7 @@ func (c *Client) fetchDir(client *pkgsftp.Client, sink scp.Sink, remote string, 
 			failures = append(failures, entryFailure)
 		}
 	}
-	if err := sink.LeaveDir(); err != nil {
+	if err := cp.sink.LeaveDir(); err != nil {
 		return nil, err
 	}
 	return errors.Join(failures...), nil

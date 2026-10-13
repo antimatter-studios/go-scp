@@ -192,7 +192,7 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | Serve `scp -f` (send) | ✅ Supported | `Send`, `SendFS`, `SendFailure` | [server](examples/server/main.go) |
 | Paths with spaces, quotes or shell characters | ✅ Supported | quoted as one word for the remote shell | |
 | Remote errors in the remote's own words | ✅ Supported | `*RemoteError` | |
-| Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize` (not an `scp` option) | |
+| Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize`, `sftp.Client.MaxSize` (not an `scp` option) | |
 | Different remote `scp` path, or `sudo scp` | ✅ Supported | `Client.Program` | [sudo](examples/sudo/main.go) |
 | Cancellation with a context | ✅ Supported | every client transfer takes a `context.Context` | |
 | `-p` preserve times and modes | ✅ Supported | `Client.Preserve`; `Header.ModTime`, `Header.AccessTime` on both halves | [preserve](examples/preserve/main.go) |
@@ -201,7 +201,7 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | Remote wildcards (`host:'logs/*.txt'`) | ✅ Supported | `Client.Glob`; servers expand with `Command.Expand` | [wildcards](examples/wildcards/main.go) |
 | File name checking (`-T` to relax it) | ✅ Supported | on by default; `Client.AnyNames` relaxes it; names with a directory part are always refused | [wildcards](examples/wildcards/main.go) |
 | Copy local paths, as the command does | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`, `DirSink` | [copy-tree](examples/copy-tree/main.go) |
-| `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` | [bandwidth](examples/bandwidth/main.go) |
+| `-l` bandwidth limit | ✅ Supported | `Client.Limit` and `sftp.Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` | [bandwidth](examples/bandwidth/main.go) |
 | `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors | [between-hosts](examples/between-hosts/main.go) |
 | `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second | [on-host](examples/on-host/main.go) |
 | `-A` agent forwarding | ✅ Supported | `Client.ForwardAgent`, after `agent.ForwardToAgent` on the connection; lets `-R` reach the second host with your keys | [on-host](examples/on-host/main.go) |
