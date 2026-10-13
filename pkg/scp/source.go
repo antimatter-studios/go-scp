@@ -130,6 +130,15 @@ func receiverRefused(err error) bool {
 	return errors.As(err, &remote) && !remote.Fatal
 }
 
+// entryAnswer sorts the receiver's answer to one entry: a refusal of just that
+// entry is the entry's failure, which the transfer survives; anything else ends it.
+func entryAnswer(err error) (failure, fatal error) {
+	if receiverRefused(err) {
+		return err, nil
+	}
+	return nil, err
+}
+
 func sendFile(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header) (failure, err error) {
 	file, openErr := fsys.Open(name)
 	if openErr != nil {
@@ -138,20 +147,14 @@ func sendFile(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header)
 	defer file.Close()
 
 	if err := sendTimes(r, out, h); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
-		return nil, err
+		return entryAnswer(err)
 	}
 	if _, err := io.WriteString(out, h.String()+"\n"); err != nil {
 		return nil, err
 	}
 	// The receiver accepts the header, or turns the file down and expects no body.
 	if err := readStatus(r); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
-		return nil, err
+		return entryAnswer(err)
 	}
 
 	n, copyErr := io.CopyN(out, file, h.Size)
@@ -188,19 +191,13 @@ func sendDir(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header, 
 	}
 
 	if err := sendTimes(r, out, h); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
-		return nil, err
+		return entryAnswer(err)
 	}
 	if _, err := fmt.Fprintf(out, "D%04o 0 %s\n", h.Mode.Perm(), h.Name); err != nil {
 		return nil, err
 	}
 	if err := readStatus(r); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
-		return nil, err
+		return entryAnswer(err)
 	}
 
 	var failures []error
