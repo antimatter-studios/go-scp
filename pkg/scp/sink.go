@@ -33,6 +33,10 @@ type ReceiveOptions struct {
 	// Recursive accepts directories, as "scp -r -t" does. Without it a
 	// directory ends the transfer.
 	Recursive bool
+
+	// single ends the transfer after its first file, as Receive and Download
+	// expect one file and return as soon as it is in.
+	single bool
 }
 
 // ReceiveAll serves the receiving end of a transfer, as "scp -t" does, for any
@@ -115,14 +119,17 @@ func receiveEntries(r *bufio.Reader, out io.Writer, opts ReceiveOptions, sink Si
 					return err
 				}
 				failures = append(failures, fmt.Errorf("scp: %q declares %d bytes, more than the %d accepted", h.Name, h.Size, opts.MaxSize))
-				continue
+			} else {
+				failure, err := receiveBody(r, out, h, sink)
+				if err != nil {
+					return err
+				}
+				if failure != nil {
+					failures = append(failures, failure)
+				}
 			}
-			failure, err := receiveBody(r, out, h, sink)
-			if err != nil {
-				return err
-			}
-			if failure != nil {
-				failures = append(failures, failure)
+			if opts.single {
+				return errors.Join(failures...)
 			}
 
 		case 'D':
@@ -180,13 +187,14 @@ func receiveBody(r *bufio.Reader, out io.Writer, h Header, sink Sink) (failure, 
 	body := io.LimitReader(r, h.Size)
 	fileErr := sink.File(h, body)
 	if _, err := io.Copy(io.Discard, body); err != nil {
-		return nil, fmt.Errorf("%w: reading the body of %q: %v", ErrProtocol, h.Name, err)
+		return nil, fmt.Errorf("%w: reading the body of %q: %w", ErrProtocol, h.Name, err)
 	}
 
 	// The sender reports its own view of the file before hearing ours.
 	status, err := r.ReadByte()
 	if err != nil {
-		return nil, fmt.Errorf("%w: no status byte after %q: %v", ErrProtocol, h.Name, err)
+		// What the sink made of the file is still worth knowing.
+		return nil, errors.Join(fmt.Errorf("%w: no status byte after %q: %v", ErrProtocol, h.Name, err), fileErr)
 	}
 	if senderErr := checkStatus(r, status); senderErr != nil && fileErr == nil {
 		fileErr = senderErr
@@ -211,4 +219,28 @@ func checkName(name string, depth int, check nameCheck) error {
 		return check(name, depth)
 	}
 	return nil
+}
+
+// oneFile is a Sink for a transfer of a single file, which it hands to take.
+// Directories never reach it: without Recursive they end the transfer first.
+type oneFile struct {
+	Sink
+	take func(Header, io.Reader) error
+	got  bool
+	h    Header
+}
+
+func (s *oneFile) File(h Header, body io.Reader) error {
+	s.got, s.h = true, h
+	return s.take(h, body)
+}
+
+// receive takes the one file the sender sends, refusing it when it declares more
+// than maxSize bytes, and returns as soon as it is in.
+func (s *oneFile) receive(r *bufio.Reader, out io.Writer, maxSize int64) error {
+	err := receiveEntries(r, out, ReceiveOptions{MaxSize: maxSize, single: true}, s, nil)
+	if err == nil && !s.got {
+		err = fmt.Errorf("%w: the sender ended without sending a file", ErrProtocol)
+	}
+	return err
 }

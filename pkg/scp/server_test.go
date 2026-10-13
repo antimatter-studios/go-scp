@@ -97,7 +97,7 @@ func TestReceiveRefusesAFileOverMaxSize(t *testing.T) {
 	if err == nil || called {
 		t.Fatalf("Receive = %v, accept called %v; want refusal before accept", err, called)
 	}
-	if out.String() != "\x00\x01file too large\n" {
+	if out.String() != "\x00\x01report.txt: file too large\n" {
 		t.Errorf("replies = %q", out.String())
 	}
 }

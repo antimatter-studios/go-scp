@@ -103,34 +103,14 @@ func (c *Client) openSession() (session, error) {
 
 // Download copies the regular file at remotePath to w, and returns its header.
 func (c *Client) Download(ctx context.Context, remotePath string, w io.Writer) (Header, error) {
-	var h Header
+	file := &oneFile{take: func(h Header, body io.Reader) error {
+		_, err := io.Copy(w, body)
+		return err
+	}}
 	err := c.run(ctx, c.command("-f", Quote(remotePath)), func(r *bufio.Reader, out io.Writer) error {
-		// Ready for the file.
-		if err := writeOK(out); err != nil {
-			return err
-		}
-		var err error
-		if h, err = downloadHeader(r, out); err != nil {
-			return err
-		}
-		if c.MaxSize > 0 && h.Size > c.MaxSize {
-			_ = writeFailure(out, "file too large")
-			return fmt.Errorf("scp: %s is %d bytes, more than the %d this client accepts", remotePath, h.Size, c.MaxSize)
-		}
-		// Header accepted; send the body.
-		if err := writeOK(out); err != nil {
-			return err
-		}
-		if _, err := io.CopyN(w, r, h.Size); err != nil {
-			return fmt.Errorf("scp: reading %s: %w", remotePath, err)
-		}
-		// The sender reports whether it read the whole file.
-		if err := readStatus(r); err != nil {
-			return err
-		}
-		return writeOK(out)
+		return file.receive(r, out, c.MaxSize)
 	})
-	return h, err
+	return file.h, err
 }
 
 // ReadFile returns the contents of the regular file at remotePath.
@@ -140,46 +120,6 @@ func (c *Client) ReadFile(ctx context.Context, remotePath string) ([]byte, error
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-// downloadHeader reads up to the file's control line, keeping the times from a time
-// line on the way.
-func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
-	var times Header
-	for {
-		kind, err := r.ReadByte()
-		if err != nil {
-			return Header{}, fmt.Errorf("%w: expected a control line: %v", ErrProtocol, err)
-		}
-		switch kind {
-		case 'C':
-			line, err := readLine(r)
-			if err != nil {
-				return Header{}, fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
-			}
-			h, err := parseHeader("C" + strings.TrimRight(line, "\n"))
-			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
-			return h, err
-		case 'T':
-			line, err := readLine(r)
-			if err != nil {
-				return Header{}, fmt.Errorf("%w: reading a time line: %v", ErrProtocol, err)
-			}
-			if err := parseTimes("T"+strings.TrimRight(line, "\n"), &times); err != nil {
-				return Header{}, err
-			}
-			if err := writeOK(out); err != nil {
-				return Header{}, err
-			}
-		case 'D':
-			return Header{}, fmt.Errorf("%w: a directory was sent where a file was asked for", ErrProtocol)
-		default:
-			if err := checkStatus(r, kind); err != nil {
-				return Header{}, err
-			}
-			return Header{}, fmt.Errorf("%w: success where a control line belongs", ErrProtocol)
-		}
-	}
 }
 
 // Upload copies h.Size bytes read from body to remotePath, creating the file with
