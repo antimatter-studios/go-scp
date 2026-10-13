@@ -19,7 +19,9 @@ import (
 // opens its own session on the connection, so one Client serves any number of them,
 // one after another or at once.
 type Client struct {
-	conn *ssh.Client
+	// newSession opens a session on the connection. A field so a test can give the
+	// client scripted sessions that fail where a live one would not.
+	newSession func() (session, error)
 
 	// Program is the command that starts scp on the remote host; "scp" when empty.
 	// It is sent as written, so a path in it must already be quoted.
@@ -54,10 +56,20 @@ type Client struct {
 	Limit int64
 }
 
+// session is the part of *ssh.Session a transfer uses.
+type session interface {
+	StdinPipe() (io.WriteCloser, error)
+	StdoutPipe() (io.Reader, error)
+	StderrPipe() (io.Reader, error)
+	Start(cmd string) error
+	Wait() error
+	Close() error
+}
+
 // NewClient returns a Client that makes its transfers over conn. Verifying the
 // remote host's key is conn's business, settled when it was dialled.
 func NewClient(conn *ssh.Client) *Client {
-	return &Client{conn: conn}
+	return &Client{newSession: func() (session, error) { return conn.NewSession() }}
 }
 
 // Download copies the regular file at remotePath to w, and returns its header.
@@ -212,7 +224,7 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	sess, err := c.conn.NewSession()
+	sess, err := c.newSession()
 	if err != nil {
 		return err
 	}
