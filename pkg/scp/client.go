@@ -3,6 +3,7 @@ package scp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,11 @@ type Client struct {
 	// MaxSize, when positive, refuses a download that declares more bytes, before
 	// any of the file is transferred.
 	MaxSize int64
+
+	// Preserve keeps file times and modes, as "scp -p" does: an upload sends the
+	// header's times and the remote reapplies the mode to an existing file; a
+	// download returns the remote file's times in its header.
+	Preserve bool
 }
 
 // NewClient returns a Client that makes its transfers over conn. Verifying the
@@ -36,9 +42,9 @@ func NewClient(conn *ssh.Client) *Client {
 }
 
 // Download copies the regular file at remotePath to w, and returns its header.
-func (c *Client) Download(remotePath string, w io.Writer) (Header, error) {
+func (c *Client) Download(ctx context.Context, remotePath string, w io.Writer) (Header, error) {
 	var h Header
-	err := c.run("-f", remotePath, func(r *bufio.Reader, out io.Writer) error {
+	err := c.run(ctx, "-f", remotePath, func(r *bufio.Reader, out io.Writer) error {
 		// Ready for the file.
 		if err := writeOK(out); err != nil {
 			return err
@@ -68,17 +74,18 @@ func (c *Client) Download(remotePath string, w io.Writer) (Header, error) {
 }
 
 // ReadFile returns the contents of the regular file at remotePath.
-func (c *Client) ReadFile(remotePath string) ([]byte, error) {
+func (c *Client) ReadFile(ctx context.Context, remotePath string) ([]byte, error) {
 	var buf bytes.Buffer
-	if _, err := c.Download(remotePath, &buf); err != nil {
+	if _, err := c.Download(ctx, remotePath, &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-// downloadHeader reads up to the file's control line, acknowledging timestamp lines
-// on the way.
+// downloadHeader reads up to the file's control line, keeping the times from a time
+// line on the way.
 func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
+	var times Header
 	for {
 		kind, err := r.ReadByte()
 		if err != nil {
@@ -90,10 +97,16 @@ func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
 			if err != nil {
 				return Header{}, fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
 			}
-			return parseHeader("C" + strings.TrimRight(line, "\n"))
+			h, err := parseHeader("C" + strings.TrimRight(line, "\n"))
+			h.ModTime, h.AccessTime = times.ModTime, times.AccessTime
+			return h, err
 		case 'T':
-			if _, err := r.ReadString('\n'); err != nil {
-				return Header{}, fmt.Errorf("%w: reading a timestamp line: %v", ErrProtocol, err)
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return Header{}, fmt.Errorf("%w: reading a time line: %v", ErrProtocol, err)
+			}
+			if err := parseTimes("T"+strings.TrimRight(line, "\n"), &times); err != nil {
+				return Header{}, err
 			}
 			if err := writeOK(out); err != nil {
 				return Header{}, err
@@ -109,19 +122,30 @@ func downloadHeader(r *bufio.Reader, out io.Writer) (Header, error) {
 	}
 }
 
-// Upload copies size bytes read from body to remotePath, creating the file with
-// mode, less the remote umask, when it does not exist. An existing file is written
-// over in place and cut to the new length, keeping its owner and permissions; that
-// is what the remote scp does, and it is not atomic.
-func (c *Client) Upload(remotePath string, body io.Reader, size int64, mode os.FileMode) error {
-	h := Header{Mode: mode.Perm(), Size: size, Name: path.Base(remotePath)}
+// Upload copies h.Size bytes read from body to remotePath, creating the file with
+// h.Mode, less the remote umask, when it does not exist. An existing file is
+// written over in place and cut to the new length, keeping its owner and
+// permissions; that is what the remote scp does, and it is not atomic. With
+// Preserve, the remote also applies h.Mode to an existing file, and h.ModTime and
+// h.AccessTime when they are set. h.Name is not used: the name is remotePath's.
+func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body io.Reader) error {
+	h.Mode = h.Mode.Perm()
+	h.Name = path.Base(remotePath)
 	if err := validName(h.Name); err != nil {
 		return err
 	}
-	return c.run("-t", remotePath, func(r *bufio.Reader, out io.Writer) error {
+	return c.run(ctx, "-t", remotePath, func(r *bufio.Reader, out io.Writer) error {
 		// The receiver is ready.
 		if err := readStatus(r); err != nil {
 			return err
+		}
+		if c.Preserve && h.hasTimes() {
+			if _, err := io.WriteString(out, h.timesLine()+"\n"); err != nil {
+				return err
+			}
+			if err := readStatus(r); err != nil {
+				return err
+			}
 		}
 		if _, err := io.WriteString(out, h.String()+"\n"); err != nil {
 			return err
@@ -130,8 +154,8 @@ func (c *Client) Upload(remotePath string, body io.Reader, size int64, mode os.F
 		if err := readStatus(r); err != nil {
 			return err
 		}
-		if n, err := io.CopyN(out, body, size); err != nil {
-			return fmt.Errorf("scp: reading the upload for %s after %d of %d bytes: %w", remotePath, n, size, err)
+		if n, err := io.CopyN(out, body, h.Size); err != nil {
+			return fmt.Errorf("scp: reading the upload for %s after %d of %d bytes: %w", remotePath, n, h.Size, err)
 		}
 		if err := writeOK(out); err != nil {
 			return err
@@ -142,20 +166,27 @@ func (c *Client) Upload(remotePath string, body io.Reader, size int64, mode os.F
 }
 
 // WriteFile writes data to remotePath; see Upload for how the file is written.
-func (c *Client) WriteFile(remotePath string, data []byte, mode os.FileMode) error {
-	return c.Upload(remotePath, bytes.NewReader(data), int64(len(data)), mode)
+func (c *Client) WriteFile(ctx context.Context, remotePath string, data []byte, mode os.FileMode) error {
+	return c.Upload(ctx, remotePath, Header{Mode: mode, Size: int64(len(data))}, bytes.NewReader(data))
 }
 
 // run starts scp on the remote host for remotePath and holds one exchange with it.
 // When the exchange fails the session is closed at once, so a remote scp that is
 // still writing cannot leave the caller waiting; anything it wrote to stderr is
 // added to the error, which is usually where a missing scp explains itself.
-func (c *Client) run(flag, remotePath string, exchange func(*bufio.Reader, io.Writer) error) error {
+// Cancelling ctx closes the session, which ends the exchange; the error is then
+// ctx's.
+func (c *Client) run(ctx context.Context, flag, remotePath string, exchange func(*bufio.Reader, io.Writer) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	sess, err := c.conn.NewSession()
 	if err != nil {
 		return err
 	}
 	defer sess.Close()
+	stop := context.AfterFunc(ctx, func() { sess.Close() })
+	defer stop()
 
 	stdin, err := sess.StdinPipe()
 	if err != nil {
@@ -182,6 +213,9 @@ func (c *Client) run(flag, remotePath string, exchange func(*bufio.Reader, io.Wr
 	if program == "" {
 		program = "scp"
 	}
+	if c.Preserve {
+		flag = "-p " + flag
+	}
 	if err := sess.Start(program + " " + flag + " " + Quote(remotePath)); err != nil {
 		return err
 	}
@@ -189,6 +223,9 @@ func (c *Client) run(flag, remotePath string, exchange func(*bufio.Reader, io.Wr
 	if err := exchange(bufio.NewReader(stdout), stdin); err != nil {
 		sess.Close()
 		<-stderrDone
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		var remote *RemoteError
 		if !errors.As(err, &remote) {
 			if msg := strings.TrimSpace(stderr.String()); msg != "" {
@@ -201,5 +238,11 @@ func (c *Client) run(flag, remotePath string, exchange func(*bufio.Reader, io.Wr
 	// End of input, so the remote scp finishes and exits. It may have done so
 	// already, which makes closing fail harmlessly: its exit status is the verdict.
 	stdin.Close()
-	return sess.Wait()
+	if err := sess.Wait(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
+	return nil
 }

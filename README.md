@@ -38,17 +38,23 @@ defer conn.Close()
 
 c := scp.NewClient(conn)
 
-data, err := c.ReadFile("/etc/hostname")
-err = c.WriteFile("/tmp/notes.txt", []byte("hello\n"), 0o644)
+data, err := c.ReadFile(ctx, "/etc/hostname")
+err = c.WriteFile(ctx, "/tmp/notes.txt", []byte("hello\n"), 0o644)
 
 // Or streamed:
-header, err := c.Download("/var/log/big.log", w)
-err = c.Upload("/tmp/big.bin", r, size, 0o600)
+header, err := c.Download(ctx, "/var/log/big.log", w)
+err = c.Upload(ctx, "/tmp/big.bin", scp.Header{Mode: 0o600, Size: size}, r)
+
+// Keep times and modes, as scp -p does:
+c.Preserve = true
+err = c.Upload(ctx, "/tmp/big.bin", scp.Header{Mode: 0o600, Size: size, ModTime: mtime}, r)
 ```
 
 A failure the remote `scp` reports comes back as a `*scp.RemoteError` with its own
 message, for example `scp: /etc/nope: No such file or directory`. When `scp`
 cannot start at all, whatever the remote wrote to stderr is added to the error.
+
+Cancelling `ctx` closes the session and the transfer returns the context's error.
 
 `Client.MaxSize` refuses a download that declares more bytes, before any of it is
 transferred. `Client.Program` replaces the remote command, for a host whose `scp`
@@ -78,6 +84,10 @@ err := scp.Send(stdin, stdout, scp.Header{Mode: 0o644, Size: size, Name: "report
 err := scp.SendFailure(stdin, stdout, "scp: report.txt: No such file or directory")
 ```
 
+Times a sender preserved with `-p` arrive in the header's `ModTime` and
+`AccessTime`; applying them is up to you. `Send` sends a header's times ahead of
+the file, so set them only when the peer ran `scp -p -f`.
+
 When the function given to `Receive` returns an error, the peer is told the
 transfer failed, so a sender that discards its copy on success keeps it. Return a
 `*scp.Rejection` to choose the message the peer sees.
@@ -101,8 +111,8 @@ run both halves against OpenSSH's `scp` wherever it is installed.
 | Remote errors in the remote's own words | ✅ Supported | `*RemoteError` |
 | Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize` (not an `scp` option) |
 | Different remote `scp` path, or `sudo scp` | ✅ Supported | `Client.Program` |
-| Cancellation with a context | 🚧 Planned | every transfer will take a `context.Context` |
-| `-p` preserve times and modes | 🚧 Planned | received timestamp lines are acknowledged and ignored today |
+| Cancellation with a context | ✅ Supported | every client transfer takes a `context.Context` |
+| `-p` preserve times and modes | ✅ Supported | `Client.Preserve`; `Header.ModTime`, `Header.AccessTime` on both halves |
 | `-r` recursive copy of directories | 🚧 Planned | client and server |
 | Several files in one transfer | 🚧 Planned | `scp a b host:dir/` |
 | Remote wildcards (`host:'logs/*.txt'`) | 🚧 Planned | |
