@@ -6,8 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
-	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -151,100 +151,56 @@ func (s *testServer) dial(t *testing.T) *Client {
 	return NewClient(conn)
 }
 
-// scpCommand reads the direction flag, whether -p was given, and the path from an
-// scp command line. The path may be quoted as Quote does, or bare as OpenSSH's own
-// client sends it.
-func scpCommand(cmd string) (flag string, preserve bool, path string, ok bool) {
-	fields := strings.Fields(cmd)
-	if len(fields) < 3 || fields[0] != "scp" {
-		return "", false, "", false
-	}
-	for _, f := range fields[1 : len(fields)-1] {
-		switch f {
-		case "-t", "-f":
-			flag = f
-		case "-p":
-			preserve = true
-		}
-	}
-	rest := strings.TrimSpace(cmd[strings.Index(cmd, flag)+len(flag):])
-	if rest == "--" || strings.HasPrefix(rest, "-- ") {
-		rest = strings.TrimSpace(strings.TrimPrefix(rest, "--"))
-	}
-	if len(rest) >= 2 && rest[0] == '\'' && rest[len(rest)-1] == '\'' {
-		rest = strings.ReplaceAll(rest[1:len(rest)-1], `'\''`, `'`)
-	}
-	return flag, preserve, rest, flag != "" && rest != ""
-}
+// rootFS is the whole local filesystem as an fs.FS, so absolute test paths can be
+// served: "/tmp/x" is "tmp/x" in it.
+var rootFS = os.DirFS("/")
 
-// fileServer answers scp commands with Receive and Send over the local filesystem,
-// writing a received file the way scp does: in place, then cut to length. With -p
-// it sends a file's modification time, and applies received times and the mode.
+func fsPath(p string) string { return strings.TrimPrefix(filepath.ToSlash(p), "/") }
+
+// fileServer answers scp commands with this package's server half over the local
+// filesystem: ReceiveAll into a DirSink for -t, SendFS for -f.
 func fileServer(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
-	flag, preserve, name, ok := scpCommand(cmd)
-	if !ok {
-		io.WriteString(stderr, "sh: "+strings.Fields(cmd + " x")[0]+": not found\n")
+	c, err := ParseCommand(cmd)
+	if err != nil {
+		io.WriteString(stderr, err.Error()+"\n")
 		return 127
 	}
 
-	if flag == "-f" {
-		file, err := os.Open(name)
+	if !c.Sink {
+		for i, path := range c.Paths {
+			c.Paths[i] = fsPath(path)
+		}
+		names, err := c.Expand(rootFS)
 		if err != nil {
-			SendFailure(stdin, stdout, "scp: "+name+": "+reason(err))
+			io.WriteString(stderr, err.Error()+"\n")
 			return 1
 		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			SendFailure(stdin, stdout, "scp: "+name+": not a regular file")
-			return 1
-		}
-		h := Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: filepath.Base(name)}
-		if preserve {
-			h.ModTime, h.AccessTime = info.ModTime(), info.ModTime()
-		}
-		if err := Send(stdin, stdout, h, file); err != nil {
+		if err := SendFS(stdin, stdout, rootFS, names, SendOptions{Recursive: c.Recursive, Preserve: c.Preserve}); err != nil {
 			return 1
 		}
 		return 0
 	}
 
-	err := Receive(stdin, stdout, 0, func(h Header, body io.Reader) error {
-		file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE, h.Mode)
-		if err != nil {
-			return &Rejection{Message: "scp: " + name + ": " + reason(err), Err: err}
-		}
-		defer file.Close()
-		if _, err := io.Copy(file, body); err != nil {
-			return err
-		}
-		if err := file.Truncate(h.Size); err != nil {
-			return err
-		}
-		if !preserve {
-			return nil
-		}
-		if err := file.Chmod(h.Mode); err != nil {
-			return err
-		}
-		if h.ModTime.IsZero() {
-			return nil
-		}
-		return os.Chtimes(name, h.AccessTime, h.ModTime)
-	})
-	if err != nil {
+	var sink Sink
+	target := c.Paths[0]
+	if info, err := os.Stat(target); c.TargetIsDir && (err != nil || !info.IsDir()) {
+		sink = failingSink{fmt.Errorf("scp: %s: Not a directory", target)}
+	} else if dir, err := NewDirSink(target, DirSinkOptions{Preserve: c.Preserve}); err != nil {
+		sink = failingSink{fmt.Errorf("scp: %s: %s", target, describe(err))}
+	} else {
+		defer dir.Close()
+		sink = dir
+	}
+	if err := ReceiveAll(stdin, stdout, ReceiveOptions{Recursive: c.Recursive}, sink); err != nil {
 		return 1
 	}
 	return 0
 }
 
-func reason(err error) string {
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return "No such file or directory"
-	case errors.Is(err, fs.ErrPermission):
-		return "Permission denied"
-	default:
-		return err.Error()
-	}
-}
+// failingSink refuses everything with one error, for a target that cannot take
+// anything; the sender is still told, entry by entry, as scp would tell it.
+type failingSink struct{ err error }
+
+func (f failingSink) File(Header, io.Reader) error { return f.err }
+func (f failingSink) EnterDir(Header) error        { return f.err }
+func (f failingSink) LeaveDir() error              { return f.err }
