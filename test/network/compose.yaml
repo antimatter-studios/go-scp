@@ -1,0 +1,22 @@
+# Two SSH hosts on one network, for the integration tests. The tests reach them on
+# loopback ports; the hosts reach each other by name.
+name: go-scp-test
+
+x-host: &host
+  build: .
+  volumes:
+    - ${KEYS_DIR:?KEYS_DIR must name the directory holding the test key}:/keys:ro
+  networks: [scpnet]
+
+services:
+  host-a:
+    <<: *host
+    hostname: host-a
+    ports: ["127.0.0.1:${HOST_A_PORT:-2221}:22"]
+  host-b:
+    <<: *host
+    hostname: host-b
+    ports: ["127.0.0.1:${HOST_B_PORT:-2222}:22"]
+
+networks:
+  scpnet: {}
