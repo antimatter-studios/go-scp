@@ -90,3 +90,20 @@ func TestQuotePattern(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandRelative(t *testing.T) {
+	c := Command{
+		Paths:    []string{"/srv/data", "../../up/and/over", "a/../../b", "", "/", "plain", "logs/*.txt"},
+		Patterns: []bool{false, false, false, false, false, false, true},
+	}
+
+	got := c.Relative()
+
+	want := []string{"srv/data", "up/and/over", "b", ".", ".", "plain", "logs/*.txt"}
+	if !reflect.DeepEqual(got.Paths, want) || !reflect.DeepEqual(got.Patterns, c.Patterns) {
+		t.Fatalf("Relative = %v %v, want %v", got.Paths, got.Patterns, want)
+	}
+	if c.Paths[0] != "/srv/data" {
+		t.Error("Relative changed the original command")
+	}
+}

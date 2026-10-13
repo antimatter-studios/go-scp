@@ -87,6 +87,23 @@ func ParseCommand(cmd string) (Command, error) {
 	return c, nil
 }
 
+// Relative returns c with every path made relative and clean: a leading / and any
+// .. that would climb above the start are dropped, so each path names something
+// under whatever root the server joins it to, and is valid in an fs.FS. An empty
+// path becomes ".".
+func (c Command) Relative() Command {
+	paths := make([]string, len(c.Paths))
+	for i, p := range c.Paths {
+		rel := strings.TrimPrefix(path.Clean("/"+p), "/")
+		if rel == "" {
+			rel = "."
+		}
+		paths[i] = rel
+	}
+	c.Paths = paths
+	return c
+}
+
 // Expand returns the files a fetch should send from fsys: each path as it is, or,
 // where the command held a wildcard, every match in sorted order. A pattern that
 // matches nothing is kept, so the peer is told it does not exist.
