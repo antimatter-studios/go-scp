@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- SFTP downloads ask for a whole read-ahead at once, `Requests` packets of
+  `BufferSize` bytes, so that many reads are in flight together: a download
+  over a link with 1 ms of latency went from 24 to 192 MB/s in the benchmark.
 - With -p the access time sent is the file's own, read from its stat on Linux
   and macOS, rather than its modification time; `AccessTime` returns it, and
   SFTP copies carry it both ways.

@@ -68,3 +68,34 @@ func slowServer(b *testing.B, latency time.Duration) *Client {
 	f.latency = latency
 	return c
 }
+
+func TestDownloadsKeepSeveralReadsInFlight(t *testing.T) {
+	f := newFaults()
+	c := faultyClient(f)
+	local := t.TempDir()
+	writeTree(t, local, map[string]string{"large": string(bytes.Repeat([]byte("x"), 1<<20))})
+	if err := c.CopyTo(t.Context(), "/large", filepath.Join(local, "large")); err != nil {
+		t.Fatal(err)
+	}
+	f.latency = time.Millisecond
+
+	back := t.TempDir()
+	if err := c.CopyFrom(t.Context(), back, "/large"); err != nil {
+		t.Fatalf("CopyFrom: %v", err)
+	}
+	if got := readTree(t, back)["large"]; len(got) != 1<<20 {
+		t.Fatalf("copied %d bytes, want %d", len(got), 1<<20)
+	}
+	if most := f.mostReading.Load(); most < 2 {
+		t.Errorf("at most %d read in flight, want several", most)
+	}
+}
+
+func TestReadAheadFollowsRequestsAndBufferSize(t *testing.T) {
+	if got := (&Client{}).readAhead(); got != defaultRequests*defaultPacket {
+		t.Errorf("default read-ahead = %d, want %d", got, defaultRequests*defaultPacket)
+	}
+	if got := (&Client{Requests: 4, BufferSize: 1024}).readAhead(); got != 4*1024 {
+		t.Errorf("read-ahead = %d, want %d", got, 4*1024)
+	}
+}

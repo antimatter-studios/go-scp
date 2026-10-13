@@ -1,6 +1,7 @@
 package sftp
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -219,7 +220,10 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
 		defer file.Close()
-		if err := cp.sink.File(h, cp.pace.reader(file)); err != nil {
+		// Read ahead by every request a file may have in flight, so they go out
+		// together rather than one per round trip.
+		body := bufio.NewReaderSize(cp.pace.reader(file), cp.readAhead())
+		if err := cp.sink.File(h, body); err != nil {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
 		return nil, nil
@@ -256,6 +260,27 @@ func (cp *copying) fetchDir(remote string, h scp.Header) (failure, err error) {
 		return nil, err
 	}
 	return errors.Join(failures...), nil
+}
+
+// github.com/pkg/sftp's defaults for the requests one file may have in flight and
+// the most one request carries.
+const (
+	defaultRequests = 64
+	defaultPacket   = 32 * 1024
+)
+
+// readAhead is how much of a remote file to ask for at once: a full packet for
+// every request a file may have in flight, which github.com/pkg/sftp then sends
+// together.
+func (c *Client) readAhead() int {
+	requests, packet := c.Requests, c.BufferSize
+	if requests <= 0 {
+		requests = defaultRequests
+	}
+	if packet <= 0 {
+		packet = defaultPacket
+	}
+	return requests * packet
 }
 
 // validName checks that name is one plain file name.

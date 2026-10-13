@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,8 +30,11 @@ type faults struct {
 	mem            pkgsftp.Handlers
 
 	// latency delays every read, as a slow link would delay each request's
-	// answer.
-	latency time.Duration
+	// answer; reading counts the reads waiting at once, and mostReading the most
+	// there have been.
+	latency     time.Duration
+	reading     atomic.Int32
+	mostReading atomic.Int32
 }
 
 func (f *faults) fails(r *pkgsftp.Request) bool {
@@ -53,17 +57,22 @@ func (f *faults) Fileread(r *pkgsftp.Request) (io.ReaderAt, error) {
 	if err != nil || f.latency == 0 {
 		return reader, err
 	}
-	return slowReaderAt{reader, f.latency}, nil
+	return slowReaderAt{reader, f}, nil
 }
 
-// slowReaderAt answers each read after a delay.
+// slowReaderAt answers each read after its server's latency, counting the reads
+// that wait at once.
 type slowReaderAt struct {
 	io.ReaderAt
-	delay time.Duration
+	f *faults
 }
 
 func (s slowReaderAt) ReadAt(p []byte, off int64) (int, error) {
-	time.Sleep(s.delay)
+	now := s.f.reading.Add(1)
+	for most := s.f.mostReading.Load(); now > most && !s.f.mostReading.CompareAndSwap(most, now); most = s.f.mostReading.Load() {
+	}
+	time.Sleep(s.f.latency)
+	s.f.reading.Add(-1)
 	return s.ReaderAt.ReadAt(p, off)
 }
 
