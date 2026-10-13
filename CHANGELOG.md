@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `sftp.Client.Limit` paces SFTP copies in bytes per second, as `scp -l` does.
+- `sftp.Client.MaxSize` refuses a remote file larger than it, as
+  `scp.Client.MaxSize` does for classic downloads.
+
 ## v0.6.0 — 2026-10-13
 
 - SFTP, as `scp -s` does, in the separate module
