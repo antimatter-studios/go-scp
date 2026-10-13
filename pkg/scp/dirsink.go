@@ -45,6 +45,10 @@ type openDir struct {
 }
 
 // NewDirSink returns a DirSink writing under target. Close it when done.
+//
+// target itself is opened as given, following any symlink on the way to it; only
+// what is written under it is held there. For a path a client chose, use
+// NewDirSinkIn, which finds the target inside a root as well.
 func NewDirSink(target string, opts DirSinkOptions) (*DirSink, error) {
 	s := &DirSink{opts: opts}
 	info, err := os.Stat(target)
@@ -54,6 +58,27 @@ func NewDirSink(target string, opts DirSinkOptions) (*DirSink, error) {
 	case err == nil || errors.Is(err, fs.ErrNotExist):
 		s.first = filepath.Base(target)
 		s.root, err = os.OpenRoot(filepath.Dir(target))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// NewDirSinkIn returns a DirSink writing to rel, a slash-separated path under
+// root. Unlike NewDirSink, the target itself is found inside root too, so a symlink
+// on the way to it can no more lead out of root than an entry can lead out of the
+// target. This is the one a server wants: rel is what a client asked for.
+func NewDirSinkIn(root *os.Root, rel string, opts DirSinkOptions) (*DirSink, error) {
+	s := &DirSink{opts: opts}
+	rel = filepath.FromSlash(rel)
+	info, err := root.Stat(rel)
+	switch {
+	case err == nil && info.IsDir():
+		s.root, err = root.OpenRoot(rel)
+	case err == nil || errors.Is(err, fs.ErrNotExist):
+		s.first = filepath.Base(rel)
+		s.root, err = root.OpenRoot(filepath.Dir(rel))
 	}
 	if err != nil {
 		return nil, err

@@ -125,38 +125,28 @@ Times a sender preserved with `-p` arrive in the header's `ModTime` and
 the file, so set them only when the peer ran `scp -p -f`.
 
 To serve the whole command as `scp` would, any number of files and directories
-included, parse it and hand it to `ReceiveAll` or `SendFS`:
+included, hand it to `Serve` with the directory to serve, opened as an `os.Root`:
 
 ```go
-cmd, err := scp.ParseCommand(command) // what the session asked to run
+root, err := os.OpenRoot("/srv/share")
 if err != nil {
 	return err
 }
-cmd = cmd.Relative() // every path now names something under root
-if cmd.Sink {        // scp -t: the peer sends files
-	sink, err := scp.NewDirSink(filepath.Join(root, filepath.FromSlash(cmd.Paths[0])), scp.DirSinkOptions{Preserve: cmd.Preserve})
-	if err != nil {
-		return err
-	}
-	defer sink.Close()
-	return scp.ReceiveAll(stdin, stdout, scp.ReceiveOptions{Recursive: cmd.Recursive}, sink)
-}
-dir, err := os.OpenRoot(root) // scp -f: the peer fetches files
-if err != nil {
-	return err
-}
-defer dir.Close()
-fsys := dir.FS() // confined to root, symlinks included
-names, err := cmd.Expand(fsys)
-if err != nil {
-	return err
-}
-return scp.SendFS(stdin, stdout, fsys, names, scp.SendOptions{Recursive: cmd.Recursive, Preserve: cmd.Preserve})
+defer root.Close()
+
+// For each session that asks to run a command:
+status := scp.Serve(command, channel, channel.Stderr(), root)
+// send status back as the session's exit status
 ```
 
-`ParseCommand` refuses anything a shell would run as more than one plain `scp`
-command. `Relative` keeps every requested path under your root; `DirSink` and
-`os.Root.FS` keep every read and write there too, through symlinks as well.
+`Serve` parses the command with `ParseCommand`, which refuses anything a shell
+would run as more than one plain `scp` command, and finds every path inside
+`root`: a path that climbs out with `..` is taken from `root`'s top, and a
+symlink cannot lead a read or a write out of it. To put the pieces together
+yourself, use `ParseCommand`, `Command.Relative`, `NewDirSinkIn` with
+`ReceiveAll`, and `os.Root.FS` with `Command.Expand` and `SendFS`.
+`NewDirSink` takes a path as given, symlinks and all, so keep it for paths you
+chose yourself, never ones a client sent.
 
 When the function given to `Receive` returns an error, the peer is told the
 transfer failed, so a sender that discards its copy on success keeps it. Return a

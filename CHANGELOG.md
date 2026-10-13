@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `Serve` answers one scp command for an SSH server under an `os.Root`,
+  confined to it through symlinks, and `NewDirSinkIn` opens a `DirSink` for a
+  path inside a root. The server example, the package example and the README
+  used `NewDirSink` on a path joined onto the served directory, which a
+  symlink inside that directory could lead a write out of; they now use
+  `Serve`.
 - `sftp.Client.Limit` paces SFTP copies in bytes per second, as `scp -l` does.
 - `sftp.Client.MaxSize` refuses a remote file larger than it, as
   `scp.Client.MaxSize` does for classic downloads.
