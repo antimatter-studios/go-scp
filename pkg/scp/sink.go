@@ -51,36 +51,15 @@ type ReceiveOptions struct {
 // refuses it, does not end the transfer; ReceiveAll goes on and returns all such
 // failures joined. A broken protocol or a failed directory ends it at once.
 func ReceiveAll(in io.Reader, out io.Writer, opts ReceiveOptions, sink Sink) error {
-	return receiveEntries(bufio.NewReader(in), out, opts, sink, nil)
+	return (&receiving{r: bufio.NewReader(in), out: out, opts: opts, sink: sink}).run()
 }
 
 // nameCheck vets a name the sender gives at a directory depth (0 for the top
 // level) before anything is written under it.
 type nameCheck func(name string, depth int) error
 
-// receiveEntries is the receiving end shared by ReceiveAll, Receive, the client's
-// downloads and the copies between hosts.
-func receiveEntries(r *bufio.Reader, out io.Writer, opts ReceiveOptions, sink Sink, check nameCheck) error {
-	// Ready for the first entry.
-	if err := writeOK(out); err != nil {
-		return err
-	}
-	rc := &receiving{r: r, out: out, opts: opts, sink: sink, check: check}
-	for {
-		line, err := readLine(r)
-		if err == io.EOF && line == "" {
-			return rc.end()
-		}
-		if err != nil {
-			return fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
-		}
-		if done, err := rc.handle(strings.TrimRight(line, "\n")); done || err != nil {
-			return err
-		}
-	}
-}
-
-// receiving is the receiving end of a transfer between control lines.
+// receiving is the receiving end of a transfer: where it reads and writes, where
+// the entries go, and the transfer's state between control lines.
 type receiving struct {
 	r     *bufio.Reader
 	out   io.Writer
@@ -91,6 +70,27 @@ type receiving struct {
 	times    Header   // from a time line, waiting for the entry it goes with
 	dirs     []string // names of the directories entered and not yet left
 	failures []error
+}
+
+// run takes a whole transfer, line by line: the receiving end shared by
+// ReceiveAll, Receive, the client's downloads and the copies between hosts.
+func (rc *receiving) run() error {
+	// Ready for the first entry.
+	if err := writeOK(rc.out); err != nil {
+		return err
+	}
+	for {
+		line, err := readLine(rc.r)
+		if err == io.EOF && line == "" {
+			return rc.end()
+		}
+		if err != nil {
+			return fmt.Errorf("%w: reading a control line: %v", ErrProtocol, err)
+		}
+		if done, err := rc.handle(strings.TrimRight(line, "\n")); done || err != nil {
+			return err
+		}
+	}
 }
 
 // handle acts on one control line, without its newline. done reports that the
@@ -278,7 +278,7 @@ func (s *oneFile) File(h Header, body io.Reader) error {
 // as it is in.
 func (s *oneFile) receive(r *bufio.Reader, out io.Writer, opts ReceiveOptions) error {
 	opts.single = true
-	err := receiveEntries(r, out, opts, s, nil)
+	err := (&receiving{r: r, out: out, opts: opts, sink: s}).run()
 	if err == nil && !s.got {
 		err = fmt.Errorf("%w: the sender ended without sending a file", ErrProtocol)
 	}
