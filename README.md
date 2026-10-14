@@ -3,9 +3,8 @@
 [![CI](https://github.com/antimatter-studios/go-scp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/antimatter-studios/go-scp/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/antimatter-studios/go-scp/badges/coverage.json)](https://github.com/antimatter-studios/go-scp/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/antimatter-studios/go-scp/pkg/scp.svg)](https://pkg.go.dev/github.com/antimatter-studios/go-scp/pkg/scp)
-[![Go Report Card](https://goreportcard.com/badge/github.com/antimatter-studios/go-scp)](https://goreportcard.com/report/github.com/antimatter-studios/go-scp)
-[![Version](https://img.shields.io/github/v/tag/antimatter-studios/go-scp?sort=semver&label=version)](https://github.com/antimatter-studios/go-scp/tags)
-[![Go version](https://img.shields.io/github/go-mod/go-version/antimatter-studios/go-scp)](go.mod)
+[![Version](https://img.shields.io/github/v/release/antimatter-studios/go-scp?display_name=release&label=version)](https://github.com/antimatter-studios/go-scp/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/antimatter-studios/go-scp?filename=pkg%2Fscp%2Fgo.mod)](pkg/scp/go.mod)
 [![License: MIT](https://img.shields.io/github/license/antimatter-studios/go-scp)](LICENSE)
 
 Both ends of the classic scp file-copy protocol in Go, over
