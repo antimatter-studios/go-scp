@@ -35,7 +35,7 @@ func TestClientRoundTripsThroughThePackagesServer(t *testing.T) {
 	if err != nil || !bytes.Equal(got, content) {
 		t.Fatalf("ReadFile = (%q, %v), want %q", got, err, content)
 	}
-	if info, _ := os.Stat(name); info.Mode().Perm() != 0o640 {
+	if info, _ := os.Stat(name); unixModes && info.Mode().Perm() != 0o640 {
 		t.Errorf("mode = %v, want 0640", info.Mode().Perm())
 	}
 }
@@ -80,7 +80,7 @@ func TestUploadOverALongerFileLeavesOnlyTheNewContent(t *testing.T) {
 	if got, _ := os.ReadFile(name); string(got) != "short" {
 		t.Errorf("file holds %q", got)
 	}
-	if info, _ := os.Stat(name); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(name); unixModes && info.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %v, want the existing 0600 kept", info.Mode().Perm())
 	}
 }

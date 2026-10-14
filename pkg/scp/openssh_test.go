@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -16,6 +17,9 @@ import (
 
 func requireOpenSSHScp(t *testing.T) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows' OpenSSH scp names a file it sends by its whole path; the remote ends these tests stand in for run a Unix scp")
+	}
 	scp, err := exec.LookPath("scp")
 	if err != nil {
 		t.Skip("OpenSSH scp is not installed")

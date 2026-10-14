@@ -144,6 +144,9 @@ func TestDirSinkCannotEnterADirectoryItCannotOpen(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root opens any directory")
 	}
+	if !unixModes {
+		t.Skip("mode 000 locks nothing on Windows")
+	}
 	dir := t.TempDir()
 	locked := filepath.Join(dir, "locked")
 	if err := os.Mkdir(locked, 0o000); err != nil {

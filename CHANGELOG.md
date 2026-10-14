@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tested on Windows in CI. On Windows a received name holding `\` or `:` is
+  refused, and the access time sent with -p comes from the file's attributes.
 - `sftp.Client.Resume` continues a file a copy left part-way, both ways, as
   sftp's `reget` and `reput` do; `DirSinkOptions.Resume` and
   `DirSink.ResumeFrom` let a sender that can start part-way write only the rest.

@@ -329,10 +329,10 @@ func TestDirSinkPreserveAppliesDirectoryModeAndTimesOnLeaving(t *testing.T) {
 
 	dir, _ := os.Stat(filepath.Join(target, "dir"))
 	file, _ := os.Stat(filepath.Join(target, "dir", "f"))
-	if dir.Mode().Perm() != 0o750 || dir.ModTime().Unix() != modTime.Unix() {
+	if (unixModes && dir.Mode().Perm() != 0o750) || dir.ModTime().Unix() != modTime.Unix() {
 		t.Errorf("dir: mode %v, mtime %v", dir.Mode().Perm(), dir.ModTime())
 	}
-	if file.Mode().Perm() != 0o600 || file.ModTime().Unix() != modTime.Unix() {
+	if (unixModes && file.Mode().Perm() != 0o600) || file.ModTime().Unix() != modTime.Unix() {
 		t.Errorf("file: mode %v, mtime %v", file.Mode().Perm(), file.ModTime())
 	}
 }

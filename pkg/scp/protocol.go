@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -132,9 +133,10 @@ func parseHeader(line string) (Header, error) {
 }
 
 // validName refuses a name the receiving end would refuse, or would read as more
-// than one file name: a directory part, "." or "..", or a line break.
+// than one file name: a directory part, "." or "..", or a line break. On Windows a
+// backslash or a colon is a directory part or a drive too.
 func validName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\n") {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\n") || (runtime.GOOS == "windows" && strings.ContainsAny(name, `\:`)) {
 		return fmt.Errorf("scp: %q cannot be sent as a file name", name)
 	}
 	return nil
