@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"strings"
 	"time"
 
@@ -134,7 +133,7 @@ func (c *Client) ReadFile(ctx context.Context, remotePath string) ([]byte, error
 // h.AccessTime when they are set. h.Name is not used: the name is remotePath's.
 func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body io.Reader) error {
 	h.Mode = h.Mode.Perm()
-	h.Name = path.Base(remotePath)
+	h.Name = remoteBase(remotePath)
 	if err := validName(h.Name); err != nil {
 		return err
 	}

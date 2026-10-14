@@ -226,6 +226,16 @@ it is dialled:
 | `-B` | `x/crypto/ssh` never prompts; nothing to set |
 | `-q`, `-v` | no output of its own; errors carry the detail |
 
+## Windows
+
+The library builds and is tested on Windows, with these differences:
+
+- Windows keeps only a read-only flag, not Unix permission bits, so modes sent
+  or preserved come out as Windows can hold them.
+- A received name holding `\` or `:` is refused, since on Windows either is a
+  directory part or a drive.
+- The access time sent with `-p` comes from the file's Windows attributes.
+
 ## Testing
 
 Four layers, all run by CI:

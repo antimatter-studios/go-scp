@@ -206,7 +206,7 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err), nil
 	}
-	h := scp.Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: path.Base(remote)}
+	h := scp.Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: remoteBase(remote)}
 	if cp.Preserve {
 		// github.com/pkg/sftp's Stat always gives a *FileStat, with the access
 		// time the server sent along with the modification time.
@@ -309,9 +309,16 @@ func (c *Client) readAhead() int {
 	return requests * packet
 }
 
-// validName checks that name is one plain file name.
+// remoteBase is the last element of a remote path, split at a slash or at a
+// backslash, since the remote host may be either kind.
+func remoteBase(p string) string {
+	return path.Base(strings.ReplaceAll(p, `\`, "/"))
+}
+
+// validName checks that name is one plain file name here; which characters break
+// a name depends on the system, see nameBreaks.
 func validName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\n") {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, nameBreaks) {
 		return fmt.Errorf("%q, which is not a plain file name", name)
 	}
 	return nil

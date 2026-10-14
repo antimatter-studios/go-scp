@@ -132,9 +132,10 @@ func parseHeader(line string) (Header, error) {
 }
 
 // validName refuses a name the receiving end would refuse, or would read as more
-// than one file name: a directory part, "." or "..", or a line break.
+// than one file name: a directory part, "." or "..", or a line break. Which
+// characters make a directory part depends on the system: see nameBreaks.
 func validName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\n") {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, nameBreaks) {
 		return fmt.Errorf("scp: %q cannot be sent as a file name", name)
 	}
 	return nil
