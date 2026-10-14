@@ -29,12 +29,24 @@ type faults struct {
 	listing        map[string][]string
 	mem            pkgsftp.Handlers
 
-	// latency delays every read, as a slow link would delay each request's
-	// answer; reading counts the reads waiting at once, and mostReading the most
-	// there have been.
+	// latency delays every read and write, as a slow link would delay each
+	// request's answer; reading and writing count the reads and writes waiting at
+	// once, and mostReading and mostWriting the most there have been.
 	latency     time.Duration
 	reading     atomic.Int32
 	mostReading atomic.Int32
+	writing     atomic.Int32
+	mostWriting atomic.Int32
+}
+
+// wait sleeps for the server's latency, counting in now, and in most the most,
+// the requests that wait at once.
+func (f *faults) wait(now, most *atomic.Int32) {
+	n := now.Add(1)
+	for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+	}
+	time.Sleep(f.latency)
+	now.Add(-1)
 }
 
 func (f *faults) fails(r *pkgsftp.Request) bool {
@@ -68,12 +80,20 @@ type slowReaderAt struct {
 }
 
 func (s slowReaderAt) ReadAt(p []byte, off int64) (int, error) {
-	now := s.f.reading.Add(1)
-	for most := s.f.mostReading.Load(); now > most && !s.f.mostReading.CompareAndSwap(most, now); most = s.f.mostReading.Load() {
-	}
-	time.Sleep(s.f.latency)
-	s.f.reading.Add(-1)
+	s.f.wait(&s.f.reading, &s.f.mostReading)
 	return s.ReaderAt.ReadAt(p, off)
+}
+
+// slowWriterAt answers each write after its server's latency, counting the writes
+// that wait at once.
+type slowWriterAt struct {
+	io.WriterAt
+	f *faults
+}
+
+func (s slowWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	s.f.wait(&s.f.writing, &s.f.mostWriting)
+	return s.WriterAt.WriteAt(p, off)
 }
 
 func (f *faults) Filewrite(r *pkgsftp.Request) (io.WriterAt, error) {
@@ -85,6 +105,9 @@ func (f *faults) Filewrite(r *pkgsftp.Request) (io.WriterAt, error) {
 	defer f.mu.Unlock()
 	if err == nil && f.failWritesFrom >= 0 {
 		return failingWriterAt{w, f.failWritesFrom}, nil
+	}
+	if err == nil && f.latency > 0 {
+		return slowWriterAt{w, f}, nil
 	}
 	return w, err
 }
@@ -342,7 +365,7 @@ func TestLeavingADirectoryThatFailsEndsTheCopy(t *testing.T) {
 	defer sink.Close()
 
 	err = client.with(t.Context(), func(conn *pkgsftp.Client) error {
-		_, err := client.copying(conn, leaveFails{sink}).fetchDir("/d", "d", scp.Header{Mode: 0o755, Name: "d"})
+		_, err := client.copying(conn, leaveFails{sink}).fetchDir(found{remote: "/d", name: "d", h: scp.Header{Mode: 0o755, Name: "d"}, dir: true})
 		return err
 	})
 	if !errors.Is(err, errFault) {

@@ -49,6 +49,15 @@ type Client struct {
 	// and CopyFrom copy only the rest. A destination longer than its source is
 	// that file's failure. Nothing checks that the part already there matches.
 	Resume bool
+
+	// Parallel is how many files a copy moves at once over its one session; 0 or
+	// 1 copies them one at a time. Each file costs round trips before its data
+	// moves, so a tree of many small files copies faster with several in flight.
+	// The files of a directory go together, which is entered before them and
+	// given its mode and times only once they are all in. Failures are still
+	// reported in the order of the listing, and Progress is never called from
+	// two files at once.
+	Parallel int
 }
 
 // ErrUnavailable is returned, wrapped, when an SFTP session cannot be started: the

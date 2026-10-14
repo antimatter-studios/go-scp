@@ -2,6 +2,7 @@ package sftp
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -41,6 +42,41 @@ func BenchmarkSFTPDownloadLargeFile(b *testing.B) {
 		if err := c.CopyFrom(b.Context(), b.TempDir(), large); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// Many small files, where each file's round trips before its data moves decide the
+// speed: one at a time, and eight at once.
+func BenchmarkSFTPManySmallFiles(b *testing.B) {
+	const count, size = 200, 16 << 10
+	local := b.TempDir()
+	files := map[string]string{}
+	for i := range count {
+		files[fmt.Sprintf("many/%03d", i)] = string(bytes.Repeat([]byte("x"), size))
+	}
+	writeTree(b, local, files)
+	for _, parallel := range []int{1, 8} {
+		b.Run(fmt.Sprintf("upload/parallel=%d", parallel), func(b *testing.B) {
+			remote := b.TempDir()
+			c := programClient(b, remote)
+			c.Recursive, c.Parallel = true, parallel
+			b.SetBytes(count * size)
+			for b.Loop() {
+				if err := c.CopyTo(b.Context(), remote, filepath.Join(local, "many")); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run(fmt.Sprintf("download/parallel=%d", parallel), func(b *testing.B) {
+			c := programClient(b, local)
+			c.Recursive, c.Parallel = true, parallel
+			b.SetBytes(count * size)
+			for b.Loop() {
+				if err := c.CopyFrom(b.Context(), b.TempDir(), filepath.Join(local, "many")); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
