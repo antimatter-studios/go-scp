@@ -32,6 +32,10 @@
   The files of a directory go together; failures are reported in listing order
   and `Progress` is never called from two files at once. In the benchmark, 200
   files of 16 KiB copy about 2.5 times as fast with 8 at once.
+- A recursive copy from this host, `SendFS` and SFTP's `CopyTo`, skips a
+  directory reached through a link back to one it is inside, and reports it as
+  that entry's failure, where it used to send the same tree inside itself until
+  the system refused the path. Links that do not loop are still followed.
 - `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
   or `Sink` of a caller's own.
 
