@@ -37,7 +37,7 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 	}
 	opts := SendOptions{Recursive: c.Recursive, Preserve: c.Preserve, Progress: c.Progress}
 	return c.run(ctx, c.command(flags, Quote(target)), func(r *bufio.Reader, out io.Writer) error {
-		return sendEntries(r, out, items, opts)
+		return newSending(r, out, opts).entries(items)
 	})
 }
 
@@ -73,7 +73,7 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 	opts := ReceiveOptions{MaxSize: c.MaxSize, Recursive: c.Recursive, Progress: c.Progress}
 	check := c.nameCheck(sources)
 	return c.run(ctx, c.command(flags, operands...), func(r *bufio.Reader, out io.Writer) error {
-		return receiveEntries(r, out, opts, sink, check)
+		return (&receiving{r: r, out: out, opts: opts, sink: sink, check: check}).run()
 	})
 }
 

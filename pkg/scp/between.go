@@ -69,7 +69,7 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 			in, back = limitedReader{r: fetch.stdout, l: pace}, limitedWriter{w: fetch.stdin, l: pace}
 		}
 		opts := ReceiveOptions{MaxSize: src.MaxSize, Recursive: src.Recursive, Progress: src.Progress}
-		return receiveEntries(bufio.NewReader(in), back, opts, toStore, src.nameCheck(sources))
+		return (&receiving{r: bufio.NewReader(in), out: back, opts: opts, sink: toStore, check: src.nameCheck(sources)}).run()
 	}()
 
 	// Both ends are done once their input closes.
