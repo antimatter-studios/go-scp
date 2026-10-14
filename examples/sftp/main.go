@@ -55,7 +55,7 @@ func main() {
 		defer conn.Close()
 		if *auto {
 			a := sftp.NewAuto(conn)
-			a.SFTP.Recursive, a.SCP.Recursive = true, true
+			a.Recursive = true
 			c = a
 		} else {
 			client := sftp.NewClient(conn)

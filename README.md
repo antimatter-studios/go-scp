@@ -41,10 +41,11 @@ go get github.com/antimatter-studios/go-scp/pkg/sftp
 import "github.com/antimatter-studios/go-scp/pkg/sftp"
 ```
 
-`sftp.Client` has the same `CopyTo` and `CopyFrom`, with `Recursive`, `Preserve`
-and `Glob`, and reaches hosts that offer only the SFTP subsystem, with no shell
+`sftp.Client` has the same `CopyTo` and `CopyFrom`, with the same
+`scp.Options` (`Recursive`, `Preserve`, `Glob`, `Limit`, `MaxSize` and
+`Progress`), and reaches hosts that offer only the SFTP subsystem, with no shell
 and no `scp` program. `sftp.Auto` uses SFTP when the host offers it and the
-classic protocol when it does not. It is built on
+classic protocol when it does not; set the options once, on `Auto`. It is built on
 [`github.com/pkg/sftp`](https://github.com/pkg/sftp) (BSD-2-Clause), and needs
 `golang.org/x/crypto` v0.54.0 or later.
 
@@ -74,6 +75,24 @@ err = c.Upload(ctx, "/tmp/big.bin", scp.Header{Mode: 0o600, Size: size, ModTime:
 A failure the remote `scp` reports comes back as a `*scp.RemoteError` with its own
 message, for example `scp: /etc/nope: No such file or directory`. When `scp`
 cannot start at all, whatever the remote wrote to stderr is added to the error.
+
+A copy of several files goes on past one it cannot copy. `scp.Failures` splits
+its error into the files it skipped, each an `*scp.FileError` with the file's
+path in the copy, and what is left, which is nil when the copy went to the end:
+
+```go
+files, rest := scp.Failures(err)
+for _, f := range files {
+	log.Printf("skipped %s: %v", f.Path, f.Err)
+}
+if rest != nil {
+	return rest // the copy stopped part-way
+}
+```
+
+The path is empty when only the remote's message names the file, as when the
+classic protocol's remote `scp` cannot read a source; over SFTP every skipped
+file is named.
 
 Cancelling `ctx` closes the session and the transfer returns the context's error.
 
@@ -148,6 +167,21 @@ yourself, use `ParseCommand`, `Command.Relative`, `NewDirSinkIn` with
 `NewDirSink` takes a path as given, symlinks and all, so keep it for paths you
 chose yourself, never ones a client sent.
 
+To say what a client may do as well as where, serve with a `Server`:
+
+```go
+share := &scp.Server{Root: root, ReadOnly: true} // clients may only fetch files
+inbox := &scp.Server{Root: root, WriteOnly: true, MaxSize: 100 << 20, Atomic: true}
+
+status := inbox.Serve(command, channel, channel.Stderr())
+```
+
+`ReadOnly` refuses uploads and `WriteOnly` downloads, each telling the client why
+before anything moves. `MaxSize` refuses an uploaded file that declares more
+bytes; the client skips it and carries on. `Atomic` writes each upload under a
+temporary name and renames it into place once whole, so a program watching the
+directory never picks up half a file.
+
 When the function given to `Receive` returns an error, the peer is told the
 transfer failed, so a sender that discards its copy on success keeps it. Return a
 `*scp.Rejection` to choose the message the peer sees.
@@ -181,13 +215,14 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | Copy one file from a remote host | ✅ Supported | `Client.Download`, `Client.ReadFile` | [download](examples/download/main.go) |
 | Serve `scp -t` (receive) | ✅ Supported | `Receive`, `ReceiveAll`, `DirSink` | [server](examples/server/main.go) |
 | Serve `scp -f` (send) | ✅ Supported | `Send`, `SendFS`, `SendFailure` | [server](examples/server/main.go) |
+| Limit what a served client may do | ✅ Supported | `Server.ReadOnly`, `Server.WriteOnly`, `Server.MaxSize` (not `scp` options) | |
 | Paths with spaces, quotes or shell characters | ✅ Supported | quoted as one word for the remote shell | |
 | Remote errors in the remote's own words | ✅ Supported | `*RemoteError` | |
 | Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize`, `sftp.Client.MaxSize` (not an `scp` option) | |
 | Different remote `scp` path, or `sudo scp` | ✅ Supported | `Client.Program` | [sudo](examples/sudo/main.go) |
 | Cancellation with a context | ✅ Supported | every client transfer takes a `context.Context` | |
 | `-p` preserve times and modes | ✅ Supported | `Client.Preserve`; `Header.ModTime`, `Header.AccessTime` on both halves | [preserve](examples/preserve/main.go) |
-| `-r` recursive copy of directories | ✅ Supported | `Client.Recursive`; `ReceiveAll`, `SendFS` with `Recursive` | [copy-tree](examples/copy-tree/main.go) |
+| `-r` recursive copy of directories | ✅ Supported | `Client.Recursive`; `ReceiveAll`, `SendFS` with `Recursive`. Symlinks to directories are followed, as scp does, except a link back to a directory it is inside, which is skipped and reported | [copy-tree](examples/copy-tree/main.go) |
 | Several files in one transfer | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`; `ReceiveAll`, `SendFS` | [wildcards](examples/wildcards/main.go) |
 | Remote wildcards (`host:'logs/*.txt'`) | ✅ Supported | `Client.Glob`; servers expand with `Command.Expand` | [wildcards](examples/wildcards/main.go) |
 | File name checking (`-T` to relax it) | ✅ Supported | on by default; `Client.AnyNames` relaxes it; names with a directory part are always refused | [wildcards](examples/wildcards/main.go) |
@@ -199,13 +234,15 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | `-s` SFTP mode | ✅ Supported | `sftp.NewClient`, in the separate `pkg/sftp` module | [sftp](examples/sftp/main.go) |
 | `-D` a local SFTP server program | ✅ Supported | `sftp.NewProgramClient` | [sftp](examples/sftp/main.go) |
 | `-X` SFTP options | ✅ Supported | `sftp.Client.Requests` (`nrequests`), `sftp.Client.BufferSize` (`buffer`) | |
+| Several files at once over SFTP | ✅ Supported | `sftp.Client.Parallel` (not an `scp` option): many small files copied about 2.5 times as fast with 8 at once on loopback | |
 | SFTP or the classic protocol, whichever the host offers | ✅ Supported | `sftp.Auto` (not an `scp` option) | [sftp](examples/sftp/main.go) |
+| Files that appear whole or not at all | ✅ Supported | `Atomic`: each file is written under a temporary name beside its target and renamed into place once complete (not an `scp` option). Honoured wherever this library writes: downloads, `DirSink` and, over SFTP, uploads; classic uploads refuse it, because the remote `scp` writes in place | |
 | Resume a copy left part-way | ✅ Supported | `sftp.Client.Resume`, as sftp's `reget` and `reput` do (not an `scp` option; the classic protocol always sends a file whole) | |
 | `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression, and adding it there waits on partial flush in `compress/flate` ([golang/go#31514](https://github.com/golang/go/issues/31514)) | |
 
-Progress needs no `scp` option: set `Client.Progress` and it is told as each
-file of every transfer starts and as its bytes move, with the file's path in the
-transfer and its size. See [progress](examples/progress/main.go).
+Progress needs no `scp` option: set `Progress` on either client, or on
+`sftp.Auto`, and it is told as each file of every transfer starts and as its
+bytes move, with the file's path in the transfer and its size. See [progress](examples/progress/main.go).
 
 ### Connection options
 
@@ -258,6 +295,190 @@ Four layers, all run by CI:
 
 CI also fails unless the tests cover every statement in `pkg/`
 (`scripts/coverage-gate.sh`), naming whatever they miss.
+
+## Changelog
+
+The last ten releases. Every release is in [CHANGELOG.md](CHANGELOG.md), and on the
+[releases page](https://github.com/antimatter-studios/go-scp/releases).
+
+### v0.8.0 — 2026-10-14
+
+The SFTP module is released alongside as `pkg/sftp/v0.8.0`, which needs this
+version.
+
+- `scp.Options` holds the settings both protocols share: `Recursive`,
+  `Preserve`, `Glob`, `Limit`, `MaxSize` and `Progress`. `scp.Client` and
+  `sftp.Client` embed it, so setting a field works as before, but a composite
+  literal naming one of them no longer compiles.
+- `sftp.Auto` embeds `scp.Options` too and applies them to whichever client a
+  copy uses, so they are set once rather than on both clients.
+- `sftp.Client` honours `Progress` in `CopyTo`, `CopyFrom` and `CopyBetween`,
+  naming each file by its path in the copy as package scp does. A resumed file
+  starts from the bytes already there.
+- Every file or directory a copy skips is an `*scp.FileError` with its path in
+  the copy, over either protocol, and `scp.Failures` splits a copy's error into
+  those and what is left, which is nil when the copy went to the end. Messages
+  are unchanged. A copy between hosts that skipped files no longer adds both
+  ends' exit status 1 to its error.
+- `Atomic`, in `scp.Options` and `DirSinkOptions`, has every file a copy
+  writes appear whole or not at all: it is written under a temporary name
+  beside its target, starting with a dot, and renamed into place once complete;
+  a file that fails is removed. With `Resume` the part written is kept as
+  `.<name>.partial` and continued. SFTP honours it both ways, renaming with
+  posix-rename@openssh.com; the classic protocol's uploads, copies between
+  hosts and `CopyOnHost` refuse to run with it, since the remote `scp` writes in
+  place.
+- `scp.Server` serves scp commands under a root, as `Serve` does, with limits:
+  `ReadOnly` refuses uploads, `WriteOnly` refuses downloads, `MaxSize` refuses
+  an uploaded file larger than it, and `Atomic` writes uploads whole. `Serve`
+  stays, as a `Server` with only a root.
+- `sftp.Client.Parallel` copies several files at once over one SFTP session.
+  The files of a directory go together; failures are reported in listing order
+  and `Progress` is never called from two files at once. In the benchmark, 200
+  files of 16 KiB copy about 2.5 times as fast with 8 at once.
+- A recursive copy from this host, `SendFS` and SFTP's `CopyTo`, skips a
+  directory reached through a link back to one it is inside, and reports it as
+  that entry's failure, where it used to send the same tree inside itself until
+  the system refused the path. Links that do not loop are still followed.
+- Examples for `Client.CopyTo`, `Client.CopyFrom`, `Server` and `Failures`, and
+  for `sftp.Client.CopyTo` and `sftp.Auto`, show on pkg.go.dev; the one for
+  `Failures` runs, with its output checked.
+- `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
+  or `Sink` of a caller's own.
+
+### v0.7.0 — 2026-10-14
+
+The SFTP module is released alongside as `pkg/sftp/v0.7.0`, which needs this
+version.
+
+- Sending one file is now done in one place, so `Upload` and the copies between
+  hosts make up a short body with zeros and report the failure, as `Send` and
+  `SendFS` already did, rather than leaving the receiver waiting. `Send`'s
+  report of a short body now reads `scp: <name>: <error>`, and `Receive`'s
+  refusal over `maxSize` names the file.
+- Tested on Windows in CI. On Windows a received name holding `\` or `:` is
+  refused, and the access time sent with -p comes from the file's attributes.
+- `sftp.Client.Resume` continues a file a copy left part-way, both ways, as
+  sftp's `reget` and `reput` do; `DirSinkOptions.Resume` and
+  `DirSink.ResumeFrom` let a sender that can start part-way write only the rest.
+- SFTP downloads ask for a whole read-ahead at once, `Requests` packets of
+  `BufferSize` bytes, so that many reads are in flight together: a download
+  over a link with 1 ms of latency went from 24 to 192 MB/s in the benchmark.
+- With -p the access time sent is the file's own, read from its stat on Linux
+  and macOS, rather than its modification time; `AccessTime` returns it, and
+  SFTP copies carry it both ways.
+- `Client.Progress`, and `Progress` in `SendOptions` and `ReceiveOptions`, is
+  told as each file of a transfer starts and as its bytes move, for single
+  files, trees and copies between hosts alike.
+- `Serve` answers one scp command for an SSH server under an `os.Root`,
+  confined to it through symlinks, and `NewDirSinkIn` opens a `DirSink` for a
+  path inside a root. The server example, the package example and the README
+  used `NewDirSink` on a path joined onto the served directory, which a
+  symlink inside that directory could lead a write out of; they now use
+  `Serve`.
+- `sftp.Client.Limit` paces SFTP copies in bytes per second, as `scp -l` does.
+- `sftp.Client.MaxSize` refuses a remote file larger than it, as
+  `scp.Client.MaxSize` does for classic downloads.
+- `sftp.CopyBetween` copies between two hosts through this program over SFTP,
+  as `scp -3` does.
+
+### v0.6.0 — 2026-10-13
+
+- SFTP, as `scp -s` does, in the separate module
+  `github.com/antimatter-studios/go-scp/pkg/sftp`, released as
+  `pkg/sftp/v0.6.0` and built on
+  `github.com/pkg/sftp`: `sftp.Client` with `CopyTo` and `CopyFrom`,
+  `NewProgramClient` for a local server program (`-D`), `Requests` and
+  `BufferSize` (`-X`), and `Auto`, which falls back to the classic protocol
+  when a host offers no SFTP.
+- Uploads over SFTP copy through plain writes, since `github.com/pkg/sftp`'s
+  `File.ReadFrom` can report a file whole when the server refused its last
+  part.
+- `Client.ForwardAgent` forwards the caller's agent, as `scp -A` does, so
+  `CopyOnHost` can reach the second host with the caller's keys.
+- Every remote command ends scp's options with `--`, so a path that starts with
+  a dash is no longer taken for an option.
+- Protocol lines are read up to 4096 bytes, so a peer that never sends a
+  newline can no longer make memory grow without end; a longer failure message
+  is cut there.
+- `DirSink` keeps only the bytes that arrived when a file body ends short,
+  instead of padding the file to its declared size, and fails that file.
+- `DirSink` holds each directory it enters open and caps paths under its target
+  at 4096 bytes, so deep nesting costs the same per level and cannot go on
+  without end.
+- `ParseCommand` reads a leading unquoted `~` as the login directory, as the
+  remote shell would for OpenSSH's scp client.
+- Fuzz targets for every part that reads what the other end sends, run briefly
+  in CI.
+
+### v0.5.0 — 2026-10-13
+
+- `Client.Limit` caps a client transfer's rate in bytes per second, as `scp -l`
+  does.
+- `CopyBetween` copies between two remote hosts through this program, as
+  `scp -3` does: each file is read from one host and written to the other, with
+  name checks and per-file errors.
+- `Client.CopyOnHost` runs scp on the connected host to copy to another host, as
+  `scp -R` does.
+- `examples/` has a runnable program for every feature, linked from the README.
+- CI tests against two `sshd` containers on one network, runs every example
+  against them, and fails unless the tests cover every statement in `pkg/`.
+
+### v0.4.0 — 2026-10-13
+
+- `Client.CopyTo` and `Client.CopyFrom` copy local paths to and from a remote
+  host, as the `scp` command does: several files at once, and directories with
+  `Client.Recursive` (`-r`).
+- `Client.Glob` leaves wildcards in remote sources for the remote shell.
+- `CopyFrom` accepts only the top-level names it asked for unless
+  `Client.AnyNames` is set (`-T`), and never a name with a directory part.
+- `ReceiveAll` and `SendFS` serve `scp -t` and `scp -f` for any number of files
+  and directories; a failed file is reported and the transfer carries on.
+- `DirSink` writes under one target through an `os.Root`.
+- `ParseCommand`, `Command.Relative` and `Command.Expand` read the command a
+  session asks to run.
+
+### v0.3.0 — 2026-10-13
+
+- Every client transfer takes a context; cancelling it closes the session.
+- `Client.Preserve` runs the remote scp with -p: uploads send times and have the
+  mode reapplied to an existing file, downloads return the remote file's times.
+- `Header` carries `ModTime` and `AccessTime`; `Receive` passes received times on
+  and `Send` sends them ahead of the file.
+- `Upload` takes a `Header` instead of a size and a mode. Breaking: every client
+  method now takes a context as its first argument.
+
+### v0.1.0 — 2026-10-13
+
+- Client: read and write a single file on a remote host over an x/crypto/ssh
+  connection, with the remote scp program as the other end.
+- Receive and Send: serve "scp -t" and "scp -f" from an SSH server, with
+  SendFailure for a fetch that cannot be served and Rejection to choose the
+  message a refused sender sees.
+- Tested against OpenSSH's scp in both directions.
+
+## Releasing
+
+Both modules are released together, at one version: `pkg/scp/vX.Y.Z` and
+`pkg/sftp/vX.Y.Z` tag one commit, and `pkg/sftp` requires `pkg/scp` at that same
+version. `scripts/release.sh` does it in three steps:
+
+```
+scripts/release.sh prepare v0.9.0  # on a branch from main, for a pull request
+scripts/release.sh tag v0.9.0      # on main once that is merged
+scripts/release.sh verify v0.9.0   # any time after
+```
+
+`prepare` dates the changelog's Unreleased section, writes the Changelog section
+above from it (`scripts/changelog-readme.sh`, which CI checks), and points the
+modules that require another at the new version. `tag` tags both modules and
+pushes the tags; the Release workflow then publishes the GitHub release, its
+notes the version's CHANGELOG.md section, written by github-guard's
+`changelog-notes` action. `verify` checks the release exists and checks the
+modules as a program that requires them sees them, through the module proxy
+alone: both at one commit, `pkg/sftp` requiring `pkg/scp` at the same version,
+and new programs using each building, with no `github.com/pkg/sftp` in one that
+uses only `pkg/scp`.
 
 ## License
 

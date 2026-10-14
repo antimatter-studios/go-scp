@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path"
 )
 
@@ -29,7 +30,8 @@ type SendOptions struct {
 //
 // An entry that cannot be sent, because it is missing, unreadable or refused by
 // the peer, is reported to the peer and skipped; SendFS goes on and returns all
-// such failures joined. A broken protocol ends the transfer at once.
+// such failures joined, each a FileError that Failures finds. A broken protocol
+// ends the transfer at once.
 func SendFS(in io.Reader, out io.Writer, fsys fs.FS, names []string, opts SendOptions) error {
 	sources := make([]source, len(names))
 	for i, name := range names {
@@ -45,14 +47,16 @@ type source struct {
 }
 
 // sending is the sending end of a transfer of files and directories: the sender
-// that speaks to the receiver, and the options that shape what it sends.
+// that speaks to the receiver, the options that shape what it sends, and the
+// directories it is inside, outermost first.
 type sending struct {
 	sender
-	opts SendOptions
+	opts  SendOptions
+	above []fs.FileInfo
 }
 
 func newSending(r *bufio.Reader, out io.Writer, opts SendOptions) sending {
-	return sending{sender{r: r, out: out, progress: opts.Progress}, opts}
+	return sending{sender: sender{r: r, out: out, progress: opts.Progress}, opts: opts}
 }
 
 // entries sends each source in turn: the sending end shared by SendFS and the
@@ -92,7 +96,10 @@ func (s sending) entry(fsys fs.FS, name string) (failure, err error) {
 
 	switch {
 	case info.IsDir() && s.opts.Recursive:
-		return s.dir(fsys, name, h)
+		if insideItself(info, s.above) {
+			return report(s.out, name, errLoop)
+		}
+		return s.dir(fsys, name, h, info)
 	case info.Mode().IsRegular():
 		return s.fromFS(fsys, name, h)
 	default:
@@ -104,13 +111,29 @@ func (s sending) entry(fsys fs.FS, name string) (failure, err error) {
 // a directory is not sent.
 var errNotRegular = errors.New("not a regular file")
 
+// errLoop is why a directory reached through a link back to one it is inside is
+// not sent: sending it would send the same tree inside itself again and again.
+var errLoop = errors.New("a link back to a directory it is inside; not followed")
+
+// insideItself reports whether the directory dir is one of above, the directories
+// it was reached through. Only the operating system's own file information can
+// say, which os.DirFS and os.Root's FS give; another filesystem cannot loop.
+func insideItself(dir fs.FileInfo, above []fs.FileInfo) bool {
+	for _, a := range above {
+		if os.SameFile(a, dir) {
+			return true
+		}
+	}
+	return false
+}
+
 // report tells the receiver an entry could not be sent, worded as OpenSSH's scp
 // words it, and returns that as the entry's failure.
 func report(out io.Writer, name string, cause error) (failure, err error) {
 	if err := writeFailure(out, "scp: "+name+": "+describe(cause)); err != nil {
 		return nil, err
 	}
-	return fmt.Errorf("scp: %s: %w", name, cause), nil
+	return skipped(name, fmt.Errorf("scp: %s: %w", name, cause)), nil
 }
 
 // describe words an error the way the C library does, which is what scp prints and
@@ -145,11 +168,11 @@ func receiverRefused(err error) bool {
 	return errors.As(err, &remote) && !remote.Fatal
 }
 
-// entryAnswer sorts the receiver's answer to one entry: a refusal of just that
+// entryAnswer sorts the receiver's answer to the entry name: a refusal of just that
 // entry is the entry's failure, which the transfer survives; anything else ends it.
-func entryAnswer(err error) (failure, fatal error) {
+func entryAnswer(name string, err error) (failure, fatal error) {
 	if receiverRefused(err) {
-		return err, nil
+		return skipped(name, err), nil
 	}
 	return nil, err
 }
@@ -179,16 +202,16 @@ type sender struct {
 // names the file in that report and to progress. It returns the file's own
 // failure, which the transfer survives, separately from an error that ends it.
 func (s sender) file(h Header, body io.Reader, label string) (failure, err error) {
-	body = s.progress.track(label, h.Size, body)
+	body = s.progress.Track(label, 0, h.Size, body)
 	if err := sendTimes(s.r, s.out, h); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(label, err)
 	}
 	if _, err := io.WriteString(s.out, h.String()+"\n"); err != nil {
 		return nil, err
 	}
 	// The receiver accepts the header, or turns the file down and expects no body.
 	if err := readStatus(s.r); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(label, err)
 	}
 
 	n, copyErr := io.CopyN(s.out, body, h.Size)
@@ -213,29 +236,34 @@ func (s sender) file(h Header, body io.Reader, label string) (failure, err error
 			failure = err
 		}
 	}
-	return failure, nil
+	if failure != nil {
+		return skipped(label, failure), nil
+	}
+	return nil, nil
 }
 
-// dir sends the directory name in fsys with everything in it.
-func (s sending) dir(fsys fs.FS, name string, h Header) (failure, err error) {
+// dir sends the directory name in fsys, described by info, with everything in it.
+func (s sending) dir(fsys fs.FS, name string, h Header, info fs.FileInfo) (failure, err error) {
 	entries, readErr := fs.ReadDir(fsys, name)
 	if readErr != nil {
 		return report(s.out, name, readErr)
 	}
 
 	if err := sendTimes(s.r, s.out, h); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(name, err)
 	}
 	if _, err := fmt.Fprintf(s.out, "D%04o 0 %s\n", h.Mode.Perm(), h.Name); err != nil {
 		return nil, err
 	}
 	if err := readStatus(s.r); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(name, err)
 	}
 
+	inside := s
+	inside.above = append(s.above, info)
 	var failures []error
 	for _, e := range entries {
-		entryFailure, err := s.entry(fsys, path.Join(name, e.Name()))
+		entryFailure, err := inside.entry(fsys, path.Join(name, e.Name()))
 		if err != nil {
 			return nil, err
 		}

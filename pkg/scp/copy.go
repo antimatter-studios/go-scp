@@ -18,10 +18,14 @@ import (
 // an existing remote directory.
 //
 // A source that cannot be sent, or that the remote refuses, is skipped; the rest
-// are copied and the error lists every failure.
+// are copied and the error lists every failure, each a FileError that Failures
+// finds.
 func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) error {
 	if len(sources) == 0 {
 		return errors.New("scp: no sources to copy")
+	}
+	if c.Atomic {
+		return errWritesInPlace
 	}
 	items := make([]source, len(sources))
 	for i, src := range sources {
@@ -59,7 +63,7 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 			return fmt.Errorf("scp: %s: must be an existing directory to take several files", target)
 		}
 	}
-	sink, err := NewDirSink(target, DirSinkOptions{Preserve: c.Preserve})
+	sink, err := NewDirSink(target, DirSinkOptions{Preserve: c.Preserve, Atomic: c.Atomic})
 	if err != nil {
 		return err
 	}
@@ -76,6 +80,10 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 		return (&receiving{r: r, out: out, opts: opts, sink: sink, check: check}).run()
 	})
 }
+
+// errWritesInPlace is why a copy that the remote scp writes does not run with
+// Atomic set.
+var errWritesInPlace = errors.New("scp: Atomic is set, but the remote scp writes each file in place; copy over SFTP to have files replaced whole")
 
 // nameCheck accepts, at the top level, only names that the sources asked for.
 func (c *Client) nameCheck(sources []string) nameCheck {

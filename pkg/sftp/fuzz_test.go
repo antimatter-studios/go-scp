@@ -92,7 +92,8 @@ func FuzzCopyFromListing(f *testing.F) {
 		for _, content := range server.files {
 			sent += int64(len(content))
 		}
-		c := &Client{Recursive: true, session: pipeSession(pkgsftp.Handlers{FileGet: server, FilePut: server, FileCmd: server, FileList: server})}
+		c := &Client{session: pipeSession(pkgsftp.Handlers{FileGet: server, FilePut: server, FileCmd: server, FileList: server})}
+		c.Recursive = true
 		base := t.TempDir()
 		target := filepath.Join(base, "target")
 		if err := os.Mkdir(target, 0o755); err != nil {

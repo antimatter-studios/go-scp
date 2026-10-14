@@ -1,0 +1,43 @@
+name: Release
+
+# A release is one version of both modules, tagged pkg/scp/vX.Y.Z and
+# pkg/sftp/vX.Y.Z on one commit. Pushing the pkg/scp tag publishes the GitHub
+# release vX.Y.Z, whose notes are that version's CHANGELOG.md section, written by
+# github-guard's changelog-notes action: the same extraction its pre-push guard
+# checks a changelog with, so the changelog and the release notes cannot disagree.
+
+on:
+  push:
+    tags:
+      - "pkg/scp/v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: echo "version=${TAG#pkg/scp/}" >>"$GITHUB_OUTPUT"
+      - name: Notes
+        id: notes
+        uses: antimatter-studios/agent-skills/.github/actions/changelog-notes@a1f622dec2e5a421419966111fa0fd8568112b4b
+        with:
+          tag: ${{ steps.version.outputs.version }}
+      # The notes compare against the previous version by its plain name; the
+      # versions here are tagged under pkg/scp/.
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          NOTES: ${{ steps.notes.outputs.file }}
+        run: |
+          set -euo pipefail
+          sed -E 's#/compare/v([0-9.]+)\.\.\.v([0-9.]+)#/compare/pkg/scp/v\1...pkg/scp/v\2#' "$NOTES" >"$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"

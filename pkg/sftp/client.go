@@ -17,28 +17,23 @@ import (
 	"os/exec"
 	"sync"
 
+	"github.com/antimatter-studios/go-scp/pkg/scp"
 	pkgsftp "github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
 // Client copies files over SFTP. Each transfer opens its own SFTP session, so one
 // Client serves any number of them.
+//
+// Of the shared Options, Preserve keeps modification and access times and modes,
+// and Limit paces each copy as a whole.
 type Client struct {
 	// session starts an SFTP session for one transfer, and returns it with the
 	// function that ends it. A field so tests can give the client a server of
 	// their own.
 	session func(opts ...pkgsftp.ClientOption) (*pkgsftp.Client, func() error, error)
 
-	// Recursive lets CopyTo and CopyFrom copy directories with their contents, as
-	// "scp -r" does.
-	Recursive bool
-
-	// Preserve keeps modification times and modes, as "scp -p" does.
-	Preserve bool
-
-	// Glob lets the remote sources given to CopyFrom hold wildcards (*, ? and
-	// [...]), matched on the remote host as scp's remote paths are.
-	Glob bool
+	scp.Options
 
 	// Requests caps how many requests may be in flight for one file, as
 	// "-X nrequests=n" does; 0 leaves github.com/pkg/sftp's default.
@@ -49,19 +44,20 @@ type Client struct {
 	// works only with a server that allows it.
 	BufferSize int
 
-	// Limit, when positive, caps each copy at that many bytes per second, as
-	// "scp -l" does. scp's -l counts Kbit/s, so -l n is a Limit of n*1000/8.
-	Limit int64
-
-	// MaxSize, when positive, refuses a remote file larger than it: CopyFrom
-	// reports it as that source's failure, writes none of it, and carries on.
-	MaxSize int64
-
 	// Resume continues a file that a copy left part-way, as sftp's reget and
 	// reput do: where the destination already holds the start of a file, CopyTo
 	// and CopyFrom copy only the rest. A destination longer than its source is
 	// that file's failure. Nothing checks that the part already there matches.
 	Resume bool
+
+	// Parallel is how many files a copy moves at once over its one session; 0 or
+	// 1 copies them one at a time. Each file costs round trips before its data
+	// moves, so a tree of many small files copies faster with several in flight.
+	// The files of a directory go together, which is entered before them and
+	// given its mode and times only once they are all in. Failures are still
+	// reported in the order of the listing, and Progress is never called from
+	// two files at once.
+	Parallel int
 }
 
 // ErrUnavailable is returned, wrapped, when an SFTP session cannot be started: the

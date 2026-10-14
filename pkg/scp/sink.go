@@ -49,7 +49,8 @@ type ReceiveOptions struct {
 //
 // A file that fails, whether the sender reports it could not read it or sink
 // refuses it, does not end the transfer; ReceiveAll goes on and returns all such
-// failures joined. A broken protocol or a failed directory ends it at once.
+// failures joined, each a FileError that Failures finds. A broken protocol or a
+// failed directory ends it at once.
 func ReceiveAll(in io.Reader, out io.Writer, opts ReceiveOptions, sink Sink) error {
 	return (&receiving{r: bufio.NewReader(in), out: out, opts: opts, sink: sink}).run()
 }
@@ -133,10 +134,11 @@ func (rc *receiving) end() error {
 // it could not read. The transfer carries on unless the failure was fatal.
 func (rc *receiving) senderFailed(line string) (done bool, err error) {
 	failure := &RemoteError{Message: line[1:], Fatal: line[0] == statusFatal}
-	rc.failures = append(rc.failures, failure)
 	if failure.Fatal {
-		return true, errors.Join(rc.failures...)
+		return true, errors.Join(append(rc.failures, failure)...)
 	}
+	// The sender's message is all that names the file.
+	rc.failures = append(rc.failures, skipped("", failure))
 	return false, nil
 }
 
@@ -173,7 +175,8 @@ func (rc *receiving) file(line string) (done bool, err error) {
 		if err := writeFailure(rc.out, h.Name+": file too large"); err != nil {
 			return true, err
 		}
-		rc.failures = append(rc.failures, fmt.Errorf("scp: %q declares %d bytes, more than the %d accepted", h.Name, h.Size, rc.opts.MaxSize))
+		tooLarge := fmt.Errorf("scp: %q declares %d bytes, more than the %d accepted", h.Name, h.Size, rc.opts.MaxSize)
+		rc.failures = append(rc.failures, skipped(rc.path(h), tooLarge))
 	} else {
 		failure, err := rc.body(h)
 		if err != nil {
@@ -223,8 +226,8 @@ func (rc *receiving) body(h Header) (failure, err error) {
 		return nil, err
 	}
 	body := io.LimitReader(r, h.Size)
-	name := path.Join(path.Join(rc.dirs...), h.Name)
-	fileErr := rc.sink.File(h, rc.opts.Progress.track(name, h.Size, body))
+	name := rc.path(h)
+	fileErr := rc.sink.File(h, rc.opts.Progress.Track(name, 0, h.Size, body))
 	if _, err := io.Copy(io.Discard, body); err != nil {
 		return nil, fmt.Errorf("%w: reading the body of %q: %w", ErrProtocol, h.Name, err)
 	}
@@ -243,9 +246,15 @@ func (rc *receiving) body(h Header) (failure, err error) {
 		if err := writeFailure(out, failureMessage(fileErr)); err != nil {
 			return nil, err
 		}
-		return fileErr, nil
+		return skipped(name, fileErr), nil
 	}
 	return nil, writeOK(out)
+}
+
+// path is the path in the transfer of the entry h describes, in the directory the
+// transfer is in.
+func (rc *receiving) path(h Header) string {
+	return path.Join(path.Join(rc.dirs...), h.Name)
 }
 
 // checkName refuses a name that could reach outside the directory it arrives in,

@@ -18,46 +18,26 @@ import (
 // connection, with the remote host's scp program as the other end of each
 // transfer. Each transfer opens its own session on the connection, so one Client
 // serves any number of them, one after another or at once.
+//
+// Of the shared Options, Preserve has an upload send the header's times and the
+// remote reapply the mode to an existing file, and has a download return the
+// remote file's times in its header; MaxSize refuses a download that declares
+// more bytes; and Limit counts both directions of a transfer together.
 type Client struct {
 	// newSession opens a session on the connection. A field so a test can give the
 	// client scripted sessions that fail where a live one would not.
 	newSession func() (session, error)
 
+	Options
+
 	// Program is the command that starts scp on the remote host; "scp" when empty.
 	// It is sent as written, so a path in it must already be quoted.
 	Program string
-
-	// MaxSize, when positive, refuses a download that declares more bytes, before
-	// any of the file is transferred.
-	MaxSize int64
-
-	// Preserve keeps file times and modes, as "scp -p" does: an upload sends the
-	// header's times and the remote reapplies the mode to an existing file; a
-	// download returns the remote file's times in its header.
-	Preserve bool
-
-	// Recursive lets CopyTo and CopyFrom copy directories with their contents, as
-	// "scp -r" does.
-	Recursive bool
-
-	// Glob lets the remote sources given to CopyFrom hold wildcards (*, ? and
-	// [...]) for the remote shell to expand, as scp's remote paths do. The rest of
-	// each source stays quoted.
-	Glob bool
 
 	// AnyNames lets CopyFrom accept top-level names other than the ones asked
 	// for, as "scp -T" does. A name that could reach outside the target is refused
 	// whatever this says.
 	AnyNames bool
-
-	// Limit, when positive, caps each transfer at that many bytes per second, both
-	// directions together, as "scp -l" does. scp's -l counts Kbit/s, so -l n is a
-	// Limit of n*1000/8.
-	Limit int64
-
-	// Progress, when set, is told how each file of every transfer moves: as it
-	// starts and as its bytes go, with its path in the transfer and its size.
-	Progress Progress
 
 	// ForwardAgent asks every session for agent forwarding, as "scp -A" does, so
 	// that the host CopyOnHost runs scp on can log in to the other host with the
@@ -128,10 +108,14 @@ func (c *Client) ReadFile(ctx context.Context, remotePath string) ([]byte, error
 // Upload copies h.Size bytes read from body to remotePath, creating the file with
 // h.Mode, less the remote umask, when it does not exist. An existing file is
 // written over in place and cut to the new length, keeping its owner and
-// permissions; that is what the remote scp does, and it is not atomic. With
-// Preserve, the remote also applies h.Mode to an existing file, and h.ModTime and
-// h.AccessTime when they are set. h.Name is not used: the name is remotePath's.
+// permissions; that is what the remote scp does, and it is not atomic, so Upload
+// refuses to run with Atomic set. With Preserve, the remote also applies h.Mode
+// to an existing file, and h.ModTime and h.AccessTime when they are set. h.Name
+// is not used: the name is remotePath's.
 func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body io.Reader) error {
+	if c.Atomic {
+		return errWritesInPlace
+	}
 	h.Mode = h.Mode.Perm()
 	h.Name = remoteBase(remotePath)
 	if err := validName(h.Name); err != nil {
@@ -203,13 +187,16 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
+		// What the remote wrote explains what stopped the exchange, not the files
+		// it skipped on the way.
+		files, rest := Failures(err)
 		var remote *RemoteError
-		if !errors.As(err, &remote) {
+		if rest != nil && !errors.As(rest, &remote) {
 			if msg := strings.TrimSpace(p.stderr.String()); msg != "" {
-				err = fmt.Errorf("%w (remote: %s)", err, msg)
+				rest = fmt.Errorf("%w (remote: %s)", rest, msg)
 			}
 		}
-		return err
+		return joinFailures(files, rest)
 	}
 
 	// End of input, so the remote scp finishes and exits. It may have done so

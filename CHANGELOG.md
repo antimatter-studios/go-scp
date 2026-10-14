@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.8.0 — 2026-10-14
+
+The SFTP module is released alongside as `pkg/sftp/v0.8.0`, which needs this
+version.
+
+- `scp.Options` holds the settings both protocols share: `Recursive`,
+  `Preserve`, `Glob`, `Limit`, `MaxSize` and `Progress`. `scp.Client` and
+  `sftp.Client` embed it, so setting a field works as before, but a composite
+  literal naming one of them no longer compiles.
+- `sftp.Auto` embeds `scp.Options` too and applies them to whichever client a
+  copy uses, so they are set once rather than on both clients.
+- `sftp.Client` honours `Progress` in `CopyTo`, `CopyFrom` and `CopyBetween`,
+  naming each file by its path in the copy as package scp does. A resumed file
+  starts from the bytes already there.
+- Every file or directory a copy skips is an `*scp.FileError` with its path in
+  the copy, over either protocol, and `scp.Failures` splits a copy's error into
+  those and what is left, which is nil when the copy went to the end. Messages
+  are unchanged. A copy between hosts that skipped files no longer adds both
+  ends' exit status 1 to its error.
+- `Atomic`, in `scp.Options` and `DirSinkOptions`, has every file a copy
+  writes appear whole or not at all: it is written under a temporary name
+  beside its target, starting with a dot, and renamed into place once complete;
+  a file that fails is removed. With `Resume` the part written is kept as
+  `.<name>.partial` and continued. SFTP honours it both ways, renaming with
+  posix-rename@openssh.com; the classic protocol's uploads, copies between
+  hosts and `CopyOnHost` refuse to run with it, since the remote `scp` writes in
+  place.
+- `scp.Server` serves scp commands under a root, as `Serve` does, with limits:
+  `ReadOnly` refuses uploads, `WriteOnly` refuses downloads, `MaxSize` refuses
+  an uploaded file larger than it, and `Atomic` writes uploads whole. `Serve`
+  stays, as a `Server` with only a root.
+- `sftp.Client.Parallel` copies several files at once over one SFTP session.
+  The files of a directory go together; failures are reported in listing order
+  and `Progress` is never called from two files at once. In the benchmark, 200
+  files of 16 KiB copy about 2.5 times as fast with 8 at once.
+- A recursive copy from this host, `SendFS` and SFTP's `CopyTo`, skips a
+  directory reached through a link back to one it is inside, and reports it as
+  that entry's failure, where it used to send the same tree inside itself until
+  the system refused the path. Links that do not loop are still followed.
+- Examples for `Client.CopyTo`, `Client.CopyFrom`, `Server` and `Failures`, and
+  for `sftp.Client.CopyTo` and `sftp.Auto`, show on pkg.go.dev; the one for
+  `Failures` runs, with its output checked.
+- `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
+  or `Sink` of a caller's own.
+
 ## v0.7.0 — 2026-10-14
 
 The SFTP module is released alongside as `pkg/sftp/v0.7.0`, which needs this

@@ -37,6 +37,10 @@ jobs:
             echo "$unformatted" >&2
             exit 1
           fi
+      # The README's Changelog section is written from CHANGELOG.md, never by hand.
+      - name: README changelog
+        if: runner.os != 'Windows'
+        run: scripts/changelog-readme.sh --check
       # Every module in go.work: the library, the SFTP module, the examples and
       # the test network's helpers.
       - name: Vet
