@@ -18,6 +18,9 @@ type SendOptions struct {
 	// Preserve sends each entry's modification time ahead of it, as "scp -p -f"
 	// does. Set it only when the peer asked for -p.
 	Preserve bool
+
+	// Progress, when set, is told how each file's body moves.
+	Progress Progress
 }
 
 // SendFS serves the sending end of a transfer, as "scp -f" does, for the named
@@ -32,7 +35,7 @@ func SendFS(in io.Reader, out io.Writer, fsys fs.FS, names []string, opts SendOp
 	for i, name := range names {
 		sources[i] = source{fsys: fsys, name: name}
 	}
-	return sendEntries(bufio.NewReader(in), out, sources, opts)
+	return newSending(bufio.NewReader(in), out, opts).entries(sources)
 }
 
 // source is one top-level entry to send: a name within a filesystem.
@@ -41,15 +44,27 @@ type source struct {
 	name string
 }
 
-// sendEntries is the sending end shared by SendFS and the client's uploads.
-func sendEntries(r *bufio.Reader, out io.Writer, sources []source, opts SendOptions) error {
+// sending is the sending end of a transfer of files and directories: the sender
+// that speaks to the receiver, and the options that shape what it sends.
+type sending struct {
+	sender
+	opts SendOptions
+}
+
+func newSending(r *bufio.Reader, out io.Writer, opts SendOptions) sending {
+	return sending{sender{r: r, out: out, progress: opts.Progress}, opts}
+}
+
+// entries sends each source in turn: the sending end shared by SendFS and the
+// client's uploads.
+func (s sending) entries(sources []source) error {
 	// The receiver says it is ready.
-	if err := readStatus(r); err != nil {
+	if err := readStatus(s.r); err != nil {
 		return err
 	}
 	var failures []error
-	for _, s := range sources {
-		failure, err := sendEntry(r, out, s.fsys, s.name, opts)
+	for _, src := range sources {
+		failure, err := s.entry(src.fsys, src.name)
 		if err != nil {
 			return errors.Join(append(failures, err)...)
 		}
@@ -60,28 +75,28 @@ func sendEntries(r *bufio.Reader, out io.Writer, sources []source, opts SendOpti
 	return errors.Join(failures...)
 }
 
-// sendEntry sends one file or directory. It returns the entry's own failure, which
+// entry sends one file or directory. It returns the entry's own failure, which
 // the transfer survives, separately from an error that ends it.
-func sendEntry(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, opts SendOptions) (failure, err error) {
+func (s sending) entry(fsys fs.FS, name string) (failure, err error) {
 	info, statErr := fs.Stat(fsys, name)
 	if statErr != nil {
-		return report(out, name, statErr)
+		return report(s.out, name, statErr)
 	}
 	h := Header{Mode: info.Mode().Perm(), Size: info.Size(), Name: path.Base(name)}
-	if opts.Preserve {
-		h.ModTime, h.AccessTime = info.ModTime(), info.ModTime()
+	if s.opts.Preserve {
+		h.ModTime, h.AccessTime = info.ModTime(), AccessTime(info)
 	}
 	if err := validName(h.Name); err != nil {
-		return report(out, name, err)
+		return report(s.out, name, err)
 	}
 
 	switch {
-	case info.IsDir() && opts.Recursive:
-		return sendDir(r, out, fsys, name, h, opts)
+	case info.IsDir() && s.opts.Recursive:
+		return s.dir(fsys, name, h)
 	case info.Mode().IsRegular():
-		return sendFile(r, out, fsys, name, h)
+		return s.fromFS(fsys, name, h)
 	default:
-		return report(out, name, errNotRegular)
+		return report(s.out, name, errNotRegular)
 	}
 }
 
@@ -130,47 +145,67 @@ func receiverRefused(err error) bool {
 	return errors.As(err, &remote) && !remote.Fatal
 }
 
-func sendFile(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header) (failure, err error) {
+// entryAnswer sorts the receiver's answer to one entry: a refusal of just that
+// entry is the entry's failure, which the transfer survives; anything else ends it.
+func entryAnswer(err error) (failure, fatal error) {
+	if receiverRefused(err) {
+		return err, nil
+	}
+	return nil, err
+}
+
+// fromFS sends the regular file name in fsys.
+func (s sending) fromFS(fsys fs.FS, name string, h Header) (failure, err error) {
 	file, openErr := fsys.Open(name)
 	if openErr != nil {
-		return report(out, name, openErr)
+		return report(s.out, name, openErr)
 	}
 	defer file.Close()
+	return s.file(h, file, name)
+}
 
-	if err := sendTimes(r, out, h); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
-		return nil, err
+// sender speaks the sending side of a transfer to a receiver: r reads its answers,
+// out takes what is sent, and progress, when set, is told how each body moves.
+type sender struct {
+	r        *bufio.Reader
+	out      io.Writer
+	progress Progress
+}
+
+// file sends one file: its time line when h carries times, its control line, and
+// h.Size bytes of body, waiting for the receiver's answer after each. When the body
+// ends early the promised size is made up with zeros and the file is reported
+// failed, so the receiver neither hangs nor keeps a short file as whole; label
+// names the file in that report and to progress. It returns the file's own
+// failure, which the transfer survives, separately from an error that ends it.
+func (s sender) file(h Header, body io.Reader, label string) (failure, err error) {
+	body = s.progress.track(label, h.Size, body)
+	if err := sendTimes(s.r, s.out, h); err != nil {
+		return entryAnswer(err)
 	}
-	if _, err := io.WriteString(out, h.String()+"\n"); err != nil {
+	if _, err := io.WriteString(s.out, h.String()+"\n"); err != nil {
 		return nil, err
 	}
 	// The receiver accepts the header, or turns the file down and expects no body.
-	if err := readStatus(r); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
-		return nil, err
+	if err := readStatus(s.r); err != nil {
+		return entryAnswer(err)
 	}
 
-	n, copyErr := io.CopyN(out, file, h.Size)
+	n, copyErr := io.CopyN(s.out, body, h.Size)
 	if copyErr != nil {
-		// The receiver is counting bytes: make up the promised size, then say the
-		// file failed, so it neither hangs nor keeps a short file as whole.
-		if _, err := io.CopyN(out, zeros{}, h.Size-n); err != nil {
+		if _, err := io.CopyN(s.out, zeros{}, h.Size-n); err != nil {
 			return nil, err
 		}
-		failure = fmt.Errorf("scp: %s: %w", name, copyErr)
-		if err := writeFailure(out, failure.Error()); err != nil {
+		failure = fmt.Errorf("scp: %s: %w", label, copyErr)
+		if err := writeFailure(s.out, failure.Error()); err != nil {
 			return nil, err
 		}
-	} else if err := writeOK(out); err != nil {
+	} else if err := writeOK(s.out); err != nil {
 		return nil, err
 	}
 
 	// The receiver reports whether it stored the file.
-	if err := readStatus(r); err != nil {
+	if err := readStatus(s.r); err != nil {
 		if !receiverRefused(err) {
 			return nil, err
 		}
@@ -181,31 +216,26 @@ func sendFile(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header)
 	return failure, nil
 }
 
-func sendDir(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header, opts SendOptions) (failure, err error) {
+// dir sends the directory name in fsys with everything in it.
+func (s sending) dir(fsys fs.FS, name string, h Header) (failure, err error) {
 	entries, readErr := fs.ReadDir(fsys, name)
 	if readErr != nil {
-		return report(out, name, readErr)
+		return report(s.out, name, readErr)
 	}
 
-	if err := sendTimes(r, out, h); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
+	if err := sendTimes(s.r, s.out, h); err != nil {
+		return entryAnswer(err)
+	}
+	if _, err := fmt.Fprintf(s.out, "D%04o 0 %s\n", h.Mode.Perm(), h.Name); err != nil {
 		return nil, err
 	}
-	if _, err := fmt.Fprintf(out, "D%04o 0 %s\n", h.Mode.Perm(), h.Name); err != nil {
-		return nil, err
-	}
-	if err := readStatus(r); err != nil {
-		if receiverRefused(err) {
-			return err, nil
-		}
-		return nil, err
+	if err := readStatus(s.r); err != nil {
+		return entryAnswer(err)
 	}
 
 	var failures []error
 	for _, e := range entries {
-		entryFailure, err := sendEntry(r, out, fsys, path.Join(name, e.Name()), opts)
+		entryFailure, err := s.entry(fsys, path.Join(name, e.Name()))
 		if err != nil {
 			return nil, err
 		}
@@ -214,10 +244,10 @@ func sendDir(r *bufio.Reader, out io.Writer, fsys fs.FS, name string, h Header, 
 		}
 	}
 
-	if _, err := io.WriteString(out, "E\n"); err != nil {
+	if _, err := io.WriteString(s.out, "E\n"); err != nil {
 		return nil, err
 	}
-	if err := readStatus(r); err != nil {
+	if err := readStatus(s.r); err != nil {
 		return nil, err
 	}
 	return errors.Join(failures...), nil

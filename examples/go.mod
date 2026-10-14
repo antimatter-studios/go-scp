@@ -10,8 +10,8 @@ replace (
 )
 
 require (
-	github.com/antimatter-studios/go-scp/pkg/scp v0.6.0
-	github.com/antimatter-studios/go-scp/pkg/sftp v0.6.0
+	github.com/antimatter-studios/go-scp/pkg/scp v0.7.0
+	github.com/antimatter-studios/go-scp/pkg/sftp v0.7.0
 	golang.org/x/crypto v0.54.0
 )
 

@@ -3,39 +3,21 @@ package scp_test
 import (
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/antimatter-studios/go-scp/pkg/scp"
 )
 
-// An SSH server answers a session that asked to run an scp command, serving files
-// under root.
+// An SSH server answers a session that asked to run an scp command, serving the
+// files under one directory and nothing outside it.
 func Example_server() {
-	serve := func(command, root string, stdin io.Reader, stdout io.Writer) error {
-		cmd, err := scp.ParseCommand(command)
-		if err != nil {
-			return err
-		}
-		cmd = cmd.Relative() // every path now names something under root
-		if cmd.Sink {        // scp -t: the peer sends files
-			sink, err := scp.NewDirSink(filepath.Join(root, filepath.FromSlash(cmd.Paths[0])), scp.DirSinkOptions{Preserve: cmd.Preserve})
-			if err != nil {
-				return err
-			}
-			defer sink.Close()
-			return scp.ReceiveAll(stdin, stdout, scp.ReceiveOptions{Recursive: cmd.Recursive}, sink)
-		}
-		dir, err := os.OpenRoot(root) // scp -f: the peer fetches files
-		if err != nil {
-			return err
-		}
-		defer dir.Close()
-		fsys := dir.FS() // confined to root, symlinks included
-		names, err := cmd.Expand(fsys)
-		if err != nil {
-			return err
-		}
-		return scp.SendFS(stdin, stdout, fsys, names, scp.SendOptions{Recursive: cmd.Recursive, Preserve: cmd.Preserve})
+	root, err := os.OpenRoot(os.TempDir())
+	if err != nil {
+		return
 	}
-	_ = serve
+	defer root.Close()
+
+	answer := func(command string, channel io.ReadWriter, stderr io.Writer) int {
+		return scp.Serve(command, channel, stderr, root) // the session's exit status
+	}
+	_ = answer
 }

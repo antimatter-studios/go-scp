@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.7.0 — 2026-10-14
+
+The SFTP module is released alongside as `pkg/sftp/v0.7.0`, which needs this
+version.
+
+- Sending one file is now done in one place, so `Upload` and the copies between
+  hosts make up a short body with zeros and report the failure, as `Send` and
+  `SendFS` already did, rather than leaving the receiver waiting. `Send`'s
+  report of a short body now reads `scp: <name>: <error>`, and `Receive`'s
+  refusal over `maxSize` names the file.
+- Tested on Windows in CI. On Windows a received name holding `\` or `:` is
+  refused, and the access time sent with -p comes from the file's attributes.
+- `sftp.Client.Resume` continues a file a copy left part-way, both ways, as
+  sftp's `reget` and `reput` do; `DirSinkOptions.Resume` and
+  `DirSink.ResumeFrom` let a sender that can start part-way write only the rest.
+- SFTP downloads ask for a whole read-ahead at once, `Requests` packets of
+  `BufferSize` bytes, so that many reads are in flight together: a download
+  over a link with 1 ms of latency went from 24 to 192 MB/s in the benchmark.
+- With -p the access time sent is the file's own, read from its stat on Linux
+  and macOS, rather than its modification time; `AccessTime` returns it, and
+  SFTP copies carry it both ways.
+- `Client.Progress`, and `Progress` in `SendOptions` and `ReceiveOptions`, is
+  told as each file of a transfer starts and as its bytes move, for single
+  files, trees and copies between hosts alike.
+- `Serve` answers one scp command for an SSH server under an `os.Root`,
+  confined to it through symlinks, and `NewDirSinkIn` opens a `DirSink` for a
+  path inside a root. The server example, the package example and the README
+  used `NewDirSink` on a path joined onto the served directory, which a
+  symlink inside that directory could lead a write out of; they now use
+  `Serve`.
+- `sftp.Client.Limit` paces SFTP copies in bytes per second, as `scp -l` does.
+- `sftp.Client.MaxSize` refuses a remote file larger than it, as
+  `scp.Client.MaxSize` does for classic downloads.
+- `sftp.CopyBetween` copies between two hosts through this program over SFTP,
+  as `scp -3` does.
+
 ## v0.6.0 — 2026-10-13
 
 - SFTP, as `scp -s` does, in the separate module

@@ -13,7 +13,7 @@ var modTime = time.Unix(1_600_000_000, 0)
 
 // writeTree creates files under dir: each key a slash-separated path, each value
 // its content.
-func writeTree(t *testing.T, dir string, files map[string]string) {
+func writeTree(t testing.TB, dir string, files map[string]string) {
 	t.Helper()
 	for name, content := range files {
 		p := filepath.Join(dir, filepath.FromSlash(name))
@@ -102,7 +102,7 @@ func TestCopyToKeepsANewFilePrivate(t *testing.T) {
 		t.Fatalf("CopyTo: %v", err)
 	}
 	for name, want := range map[string]os.FileMode{"key": 0o600, "run.sh": 0o755} {
-		if info, err := os.Stat(filepath.Join(remote, name)); err != nil || info.Mode().Perm() != want {
+		if info, err := os.Stat(filepath.Join(remote, name)); err != nil || (unixModes && info.Mode().Perm() != want) {
 			t.Errorf("%s: mode %v (%v), want %v", name, info.Mode().Perm(), err, want)
 		}
 	}
@@ -122,7 +122,7 @@ func TestCopyToKeepsAnExistingFilesMode(t *testing.T) {
 	if got, _ := os.ReadFile(existing); string(got) != "new content" {
 		t.Errorf("file holds %q", got)
 	}
-	if info, _ := os.Stat(existing); info.Mode().Perm() != 0o640 {
+	if info, _ := os.Stat(existing); unixModes && info.Mode().Perm() != 0o640 {
 		t.Errorf("mode = %v, want 0640 kept", info.Mode().Perm())
 	}
 }
@@ -154,7 +154,7 @@ func TestPreserveKeepsModesAndTimesBothWays(t *testing.T) {
 	for _, root := range []string{remote, back} {
 		for p, mode := range map[string]os.FileMode{"dir": 0o750, "dir/f": 0o604} {
 			info, err := os.Stat(filepath.Join(root, p))
-			if err != nil || info.Mode().Perm() != mode || !info.ModTime().Equal(modTime) {
+			if err != nil || (unixModes && info.Mode().Perm() != mode) || !info.ModTime().Equal(modTime) {
 				t.Errorf("%s/%s: %v %v (%v), want %v %v", root, p, info.Mode().Perm(), info.ModTime(), err, mode, modTime)
 			}
 		}
@@ -167,7 +167,8 @@ func TestCopyFromWithWildcards(t *testing.T) {
 	c := programClient(t, remote)
 	c.Glob = true
 
-	if err := c.CopyFrom(t.Context(), back, filepath.Join(remote, "logs", "*.txt")); err != nil {
+	// SFTP paths are slash-separated, which a Windows path is not.
+	if err := c.CopyFrom(t.Context(), back, filepath.ToSlash(filepath.Join(remote, "logs", "*.txt"))); err != nil {
 		t.Fatalf("CopyFrom: %v", err)
 	}
 	if got := readTree(t, back); !reflect.DeepEqual(got, map[string]string{"a.txt": "A", "b.txt": "B"}) {

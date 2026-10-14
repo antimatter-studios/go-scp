@@ -19,11 +19,12 @@ go get github.com/antimatter-studios/go-scp/pkg/scp
 import "github.com/antimatter-studios/go-scp/pkg/scp"
 ```
 
-- **Client** copies a single file to or from a remote host over an SSH connection
-  you have already dialled. The other end is the remote host's own `scp` program,
-  so nothing needs installing there and nothing runs locally but Go.
-- **Receive** and **Send** are the other end, for an SSH server that handles
-  transfers itself instead of running `scp`.
+- **Client** copies files and directories to and from a remote host over an SSH
+  connection you have already dialled, and between two remote hosts. The other
+  end is the remote host's own `scp` program, so nothing needs installing there
+  and nothing runs locally but Go.
+- **Receive**, **ReceiveAll**, **Send** and **SendFS** are the other end, for an
+  SSH server that handles transfers itself instead of running `scp`.
 
 Its only dependency is `golang.org/x/crypto`.
 
@@ -124,38 +125,28 @@ Times a sender preserved with `-p` arrive in the header's `ModTime` and
 the file, so set them only when the peer ran `scp -p -f`.
 
 To serve the whole command as `scp` would, any number of files and directories
-included, parse it and hand it to `ReceiveAll` or `SendFS`:
+included, hand it to `Serve` with the directory to serve, opened as an `os.Root`:
 
 ```go
-cmd, err := scp.ParseCommand(command) // what the session asked to run
+root, err := os.OpenRoot("/srv/share")
 if err != nil {
 	return err
 }
-cmd = cmd.Relative() // every path now names something under root
-if cmd.Sink {        // scp -t: the peer sends files
-	sink, err := scp.NewDirSink(filepath.Join(root, filepath.FromSlash(cmd.Paths[0])), scp.DirSinkOptions{Preserve: cmd.Preserve})
-	if err != nil {
-		return err
-	}
-	defer sink.Close()
-	return scp.ReceiveAll(stdin, stdout, scp.ReceiveOptions{Recursive: cmd.Recursive}, sink)
-}
-dir, err := os.OpenRoot(root) // scp -f: the peer fetches files
-if err != nil {
-	return err
-}
-defer dir.Close()
-fsys := dir.FS() // confined to root, symlinks included
-names, err := cmd.Expand(fsys)
-if err != nil {
-	return err
-}
-return scp.SendFS(stdin, stdout, fsys, names, scp.SendOptions{Recursive: cmd.Recursive, Preserve: cmd.Preserve})
+defer root.Close()
+
+// For each session that asks to run a command:
+status := scp.Serve(command, channel, channel.Stderr(), root)
+// send status back as the session's exit status
 ```
 
-`ParseCommand` refuses anything a shell would run as more than one plain `scp`
-command. `Relative` keeps every requested path under your root; `DirSink` and
-`os.Root.FS` keep every read and write there too, through symlinks as well.
+`Serve` parses the command with `ParseCommand`, which refuses anything a shell
+would run as more than one plain `scp` command, and finds every path inside
+`root`: a path that climbs out with `..` is taken from `root`'s top, and a
+symlink cannot lead a read or a write out of it. To put the pieces together
+yourself, use `ParseCommand`, `Command.Relative`, `NewDirSinkIn` with
+`ReceiveAll`, and `os.Root.FS` with `Command.Expand` and `SendFS`.
+`NewDirSink` takes a path as given, symlinks and all, so keep it for paths you
+chose yourself, never ones a client sent.
 
 When the function given to `Receive` returns an error, the peer is told the
 transfer failed, so a sender that discards its copy on success keeps it. Return a
@@ -192,7 +183,7 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | Serve `scp -f` (send) | ✅ Supported | `Send`, `SendFS`, `SendFailure` | [server](examples/server/main.go) |
 | Paths with spaces, quotes or shell characters | ✅ Supported | quoted as one word for the remote shell | |
 | Remote errors in the remote's own words | ✅ Supported | `*RemoteError` | |
-| Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize` (not an `scp` option) | |
+| Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize`, `sftp.Client.MaxSize` (not an `scp` option) | |
 | Different remote `scp` path, or `sudo scp` | ✅ Supported | `Client.Program` | [sudo](examples/sudo/main.go) |
 | Cancellation with a context | ✅ Supported | every client transfer takes a `context.Context` | |
 | `-p` preserve times and modes | ✅ Supported | `Client.Preserve`; `Header.ModTime`, `Header.AccessTime` on both halves | [preserve](examples/preserve/main.go) |
@@ -201,18 +192,20 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | Remote wildcards (`host:'logs/*.txt'`) | ✅ Supported | `Client.Glob`; servers expand with `Command.Expand` | [wildcards](examples/wildcards/main.go) |
 | File name checking (`-T` to relax it) | ✅ Supported | on by default; `Client.AnyNames` relaxes it; names with a directory part are always refused | [wildcards](examples/wildcards/main.go) |
 | Copy local paths, as the command does | ✅ Supported | `Client.CopyTo`, `Client.CopyFrom`, `DirSink` | [copy-tree](examples/copy-tree/main.go) |
-| `-l` bandwidth limit | ✅ Supported | `Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` | [bandwidth](examples/bandwidth/main.go) |
-| `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`; each file is read from one host and written to the other, with name checks and per-file errors | [between-hosts](examples/between-hosts/main.go) |
+| `-l` bandwidth limit | ✅ Supported | `Client.Limit` and `sftp.Client.Limit`, in bytes per second; `scp -l n` (Kbit/s) is `n*1000/8` | [bandwidth](examples/bandwidth/main.go) |
+| `-3` remote to remote, through this host | ✅ Supported | `CopyBetween`, and `sftp.CopyBetween` over SFTP; each file is read from one host and written to the other, with name checks and per-file errors | [between-hosts](examples/between-hosts/main.go), [sftp](examples/sftp/main.go) |
 | `-R` remote to remote, run on the first host | ✅ Supported | `Client.CopyOnHost`; the first host's own scp and SSH setup reach the second | [on-host](examples/on-host/main.go) |
 | `-A` agent forwarding | ✅ Supported | `Client.ForwardAgent`, after `agent.ForwardToAgent` on the connection; lets `-R` reach the second host with your keys | [on-host](examples/on-host/main.go) |
 | `-s` SFTP mode | ✅ Supported | `sftp.NewClient`, in the separate `pkg/sftp` module | [sftp](examples/sftp/main.go) |
 | `-D` a local SFTP server program | ✅ Supported | `sftp.NewProgramClient` | [sftp](examples/sftp/main.go) |
 | `-X` SFTP options | ✅ Supported | `sftp.Client.Requests` (`nrequests`), `sftp.Client.BufferSize` (`buffer`) | |
 | SFTP or the classic protocol, whichever the host offers | ✅ Supported | `sftp.Auto` (not an `scp` option) | [sftp](examples/sftp/main.go) |
+| Resume a copy left part-way | ✅ Supported | `sftp.Client.Resume`, as sftp's `reget` and `reput` do (not an `scp` option; the classic protocol always sends a file whole) | |
 | `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression, and adding it there waits on partial flush in `compress/flate` ([golang/go#31514](https://github.com/golang/go/issues/31514)) | |
 
-Progress reporting needs no option: transfers stream through `io.Reader` and
-`io.Writer`, so wrap the one you pass to count bytes.
+Progress needs no `scp` option: set `Client.Progress` and it is told as each
+file of every transfer starts and as its bytes move, with the file's path in the
+transfer and its size. See [progress](examples/progress/main.go).
 
 ### Connection options
 
@@ -232,6 +225,16 @@ it is dialled:
 | `-S program` | nothing to set: no `ssh` program is run |
 | `-B` | `x/crypto/ssh` never prompts; nothing to set |
 | `-q`, `-v` | no output of its own; errors carry the detail |
+
+## Windows
+
+The library builds and is tested on Windows, with these differences:
+
+- Windows keeps only a read-only flag, not Unix permission bits, so modes sent
+  or preserved come out as Windows can hold them.
+- A received name holding `\` or `:` is refused, since on Windows either is a
+  directory part or a drive.
+- The access time sent with `-p` comes from the file's Windows attributes.
 
 ## Testing
 

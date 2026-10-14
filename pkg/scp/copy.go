@@ -35,9 +35,9 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 	if len(sources) > 1 {
 		flags = "-d " + flags // the remote refuses a target that is not a directory
 	}
-	opts := SendOptions{Recursive: c.Recursive, Preserve: c.Preserve}
+	opts := SendOptions{Recursive: c.Recursive, Preserve: c.Preserve, Progress: c.Progress}
 	return c.run(ctx, c.command(flags, Quote(target)), func(r *bufio.Reader, out io.Writer) error {
-		return sendEntries(r, out, items, opts)
+		return newSending(r, out, opts).entries(items)
 	})
 }
 
@@ -65,22 +65,15 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 	}
 	defer sink.Close()
 
-	operands := make([]string, len(sources))
-	for i, s := range sources {
-		if c.Glob {
-			operands[i] = quotePattern(s)
-		} else {
-			operands[i] = Quote(s)
-		}
-	}
+	operands := c.remoteOperands(sources)
 	flags := "-f"
 	if c.Recursive {
 		flags = "-r " + flags
 	}
-	opts := ReceiveOptions{MaxSize: c.MaxSize, Recursive: c.Recursive}
+	opts := ReceiveOptions{MaxSize: c.MaxSize, Recursive: c.Recursive, Progress: c.Progress}
 	check := c.nameCheck(sources)
 	return c.run(ctx, c.command(flags, operands...), func(r *bufio.Reader, out io.Writer) error {
-		return receiveEntries(r, out, opts, sink, check)
+		return (&receiving{r: r, out: out, opts: opts, sink: sink, check: check}).run()
 	})
 }
 
@@ -89,9 +82,11 @@ func (c *Client) nameCheck(sources []string) nameCheck {
 	if c.AnyNames {
 		return nil
 	}
-	wanted := make([]string, len(sources))
-	for i, s := range sources {
-		wanted[i] = path.Base(s)
+	// The last element of each source, split as a Unix host splits it, and as a
+	// Windows host would.
+	var wanted []string
+	for _, s := range sources {
+		wanted = append(wanted, path.Base(s), remoteBase(s))
 	}
 	return func(name string, depth int) error {
 		if depth > 0 {
@@ -109,6 +104,26 @@ func (c *Client) nameCheck(sources []string) nameCheck {
 		}
 		return fmt.Errorf("scp: the remote sent %q, which was not asked for", name)
 	}
+}
+
+// remoteBase is the last element of a remote path, split at a slash or at a
+// backslash, since the remote host may be either kind.
+func remoteBase(p string) string {
+	return path.Base(strings.ReplaceAll(p, `\`, "/"))
+}
+
+// remoteOperands quotes remote paths for the remote shell, each as one word, or,
+// with Glob, leaving their wildcards for the shell to expand.
+func (c *Client) remoteOperands(paths []string) []string {
+	operands := make([]string, len(paths))
+	for i, p := range paths {
+		if c.Glob {
+			operands[i] = quotePattern(p)
+		} else {
+			operands[i] = Quote(p)
+		}
+	}
+	return operands
 }
 
 // quotePattern quotes s for the remote shell like Quote, except for wildcards

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -147,9 +148,14 @@ func serveSCP(cmd string, ch ssh.Channel) uint32 {
 			sink.Close()
 		}
 	} else if err == nil {
-		fsys := os.DirFS("/")
+		// The whole filesystem, or on Windows the volume the temporary directory
+		// is on, with each path named inside it.
+		fsys := os.DirFS(filepath.VolumeName(os.TempDir()) + string(filepath.Separator))
+		for i, p := range c.Paths {
+			c.Paths[i] = strings.TrimPrefix(filepath.ToSlash(strings.TrimPrefix(p, filepath.VolumeName(p))), "/")
+		}
 		var names []string
-		if names, err = c.Relative().Expand(fsys); err == nil {
+		if names, err = c.Expand(fsys); err == nil {
 			err = scp.SendFS(ch, ch, fsys, names, scp.SendOptions{Recursive: c.Recursive, Preserve: c.Preserve})
 		}
 	}

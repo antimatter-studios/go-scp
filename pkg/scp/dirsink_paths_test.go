@@ -144,6 +144,9 @@ func TestDirSinkCannotEnterADirectoryItCannotOpen(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root opens any directory")
 	}
+	if !unixModes {
+		t.Skip("mode 000 locks nothing on Windows")
+	}
 	dir := t.TempDir()
 	locked := filepath.Join(dir, "locked")
 	if err := os.Mkdir(locked, 0o000); err != nil {
@@ -174,5 +177,50 @@ func TestDirSinkCloseReleasesDirectoriesStillOpen(t *testing.T) {
 	}
 	if len(sink.dirs) != 0 {
 		t.Errorf("%d directories still held", len(sink.dirs))
+	}
+}
+
+func TestDirSinkResumesAFileFromWhereItEnds(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("AB"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sink := newDirSink(t, dir, DirSinkOptions{Resume: true})
+	h := Header{Mode: 0o644, Size: 10, Name: "f"}
+
+	offset, err := sink.ResumeFrom(h)
+	if err != nil || offset != 2 {
+		t.Fatalf("ResumeFrom = (%d, %v), want 2", offset, err)
+	}
+	if err := sink.File(h, strings.NewReader("23456789")); err != nil {
+		t.Fatalf("File: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "f")); string(got) != "AB23456789" {
+		t.Errorf("file holds %q", got)
+	}
+	if err := sink.File(Header{Mode: 0o644, Size: 10, Name: "g"}, strings.NewReader("abc")); err == nil || !strings.Contains(err.Error(), "3 of 10 bytes") {
+		t.Errorf("a short body when resuming: %v, want it reported", err)
+	}
+}
+
+func TestDirSinkResumeFromReportsWhatItCannotResume(t *testing.T) {
+	sink := newDirSink(t, filepath.Join(t.TempDir(), "new"), DirSinkOptions{Resume: true})
+	if err := sink.File(Header{Mode: 0o644, Name: "a"}, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sink.ResumeFrom(Header{Name: "b"}); err == nil {
+		t.Error("a second entry for a target that is not a directory: want an error")
+	}
+
+	dir := t.TempDir()
+	sink = newDirSink(t, dir, DirSinkOptions{Resume: true})
+	if _, err := sink.ResumeFrom(Header{Name: strings.Repeat("n", 300)}); err == nil {
+		t.Error("a name the system refuses: want an error")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "long"), []byte("longer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.File(Header{Mode: 0o644, Size: 2, Name: "long"}, strings.NewReader("ab")); err == nil {
+		t.Error("resuming over a longer file: want an error")
 	}
 }

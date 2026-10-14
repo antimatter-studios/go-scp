@@ -48,6 +48,20 @@ type Client struct {
 	// the default of 32768 bytes, the size every server must accept. A larger size
 	// works only with a server that allows it.
 	BufferSize int
+
+	// Limit, when positive, caps each copy at that many bytes per second, as
+	// "scp -l" does. scp's -l counts Kbit/s, so -l n is a Limit of n*1000/8.
+	Limit int64
+
+	// MaxSize, when positive, refuses a remote file larger than it: CopyFrom
+	// reports it as that source's failure, writes none of it, and carries on.
+	MaxSize int64
+
+	// Resume continues a file that a copy left part-way, as sftp's reget and
+	// reput do: where the destination already holds the start of a file, CopyTo
+	// and CopyFrom copy only the rest. A destination longer than its source is
+	// that file's failure. Nothing checks that the part already there matches.
+	Resume bool
 }
 
 // ErrUnavailable is returned, wrapped, when an SFTP session cannot be started: the

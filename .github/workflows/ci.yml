@@ -13,15 +13,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # The steps are bash scripts; Windows runners have bash from Git for Windows.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.work
           cache: true
+      # gofmt writes LF; Git for Windows checks files out with CRLF unless told not
+      # to, so formatting is checked where the checkout keeps them as written.
       - name: Formatting
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           unformatted=$(gofmt -l .)
@@ -42,8 +49,9 @@ jobs:
           command -v scp
           go test -race -count=1 ./pkg/scp/... ./pkg/sftp/... ./examples/... ./test/...
       # Every statement in pkg/ must be covered, in both modules; the step names
-      # whatever is not.
+      # whatever is not. Some code is for Unix only, so Windows does not count.
       - name: Coverage
+        if: runner.os != 'Windows'
         run: scripts/coverage-gate.sh
 
   # The library against real SSH hosts: two sshd containers on one network,

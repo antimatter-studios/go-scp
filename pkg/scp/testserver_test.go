@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ type testServer struct {
 	keyPath string // the one client key it accepts, for clients to dial with
 }
 
-func newTestServer(t *testing.T, h handler) *testServer {
+func newTestServer(t testing.TB, h handler) *testServer {
 	t.Helper()
 
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
@@ -129,7 +130,7 @@ func serveSession(ch ssh.Channel, requests <-chan *ssh.Request, h handler) {
 }
 
 // dial connects a Client to s with its key.
-func (s *testServer) dial(t *testing.T) *Client {
+func (s *testServer) dial(t testing.TB) *Client {
 	t.Helper()
 	pem, err := os.ReadFile(s.keyPath)
 	if err != nil {
@@ -152,10 +153,17 @@ func (s *testServer) dial(t *testing.T) *Client {
 }
 
 // rootFS is the whole local filesystem as an fs.FS, so absolute test paths can be
-// served: "/tmp/x" is "tmp/x" in it.
-var rootFS = os.DirFS("/")
+// served: "/tmp/x" is "tmp/x" in it. On Windows it is the volume the temporary
+// directory is on, and "C:\x" is "x" in it.
+var rootFS = os.DirFS(filepath.VolumeName(os.TempDir()) + string(filepath.Separator))
 
-func fsPath(p string) string { return strings.TrimPrefix(filepath.ToSlash(p), "/") }
+func fsPath(p string) string {
+	return strings.TrimPrefix(filepath.ToSlash(strings.TrimPrefix(p, filepath.VolumeName(p))), "/")
+}
+
+// unixModes reports whether files here keep Unix permission bits. Windows keeps
+// only a read-only flag, so a test of modes has nothing to check there.
+var unixModes = runtime.GOOS != "windows"
 
 // fileServer answers scp commands with this package's server half over the local
 // filesystem: ReceiveAll into a DirSink for -t, SendFS for -f.

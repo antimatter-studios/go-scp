@@ -104,7 +104,7 @@ func TestPreserveUploadAppliesTimesAndMode(t *testing.T) {
 		t.Fatalf("Upload: %v", err)
 	}
 	info, _ := os.Stat(name)
-	if info.Mode().Perm() != 0o640 {
+	if unixModes && info.Mode().Perm() != 0o640 {
 		t.Errorf("mode = %v, want 0640 applied to the existing file", info.Mode().Perm())
 	}
 	if !info.ModTime().Equal(modTime) {

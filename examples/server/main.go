@@ -11,11 +11,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"flag"
-	"io"
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/crypto/ssh"
 
@@ -37,13 +35,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	served, err := os.OpenRoot(*root)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer served.Close()
 	log.Printf("serving %s on %s", *root, ln.Addr())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			log.Fatal(err)
 		}
-		go serveConn(conn, config, *root)
+		go serveConn(conn, config, served)
 	}
 }
 
@@ -76,7 +79,7 @@ func serverConfig(hostKeyFile, authorizedFile string) (*ssh.ServerConfig, error)
 	return config, nil
 }
 
-func serveConn(conn net.Conn, config *ssh.ServerConfig, root string) {
+func serveConn(conn net.Conn, config *ssh.ServerConfig, root *os.Root) {
 	sc, chans, reqs, err := ssh.NewServerConn(conn, config)
 	if err != nil {
 		conn.Close()
@@ -99,7 +102,7 @@ func serveConn(conn net.Conn, config *ssh.ServerConfig, root string) {
 
 // serveSession answers one session's exec request, which an scp client sends as
 // "scp -t <path>" or "scp -f <path>". Anything else is refused.
-func serveSession(ch ssh.Channel, requests <-chan *ssh.Request, root string) {
+func serveSession(ch ssh.Channel, requests <-chan *ssh.Request, root *os.Root) {
 	defer ch.Close()
 	for req := range requests {
 		if req.Type != "exec" {
@@ -113,41 +116,11 @@ func serveSession(ch ssh.Channel, requests <-chan *ssh.Request, root string) {
 		}
 		req.Reply(true, nil)
 
-		status := uint32(0)
-		if err := serveScp(payload.Command, root, ch); err != nil {
-			io.WriteString(ch.Stderr(), err.Error()+"\n")
-			status = 1
-		}
+		// Every path is found inside root, symlinks included.
+		status := scp.Serve(payload.Command, ch, ch.Stderr(), root)
 		exit := make([]byte, 4)
-		binary.BigEndian.PutUint32(exit, status)
+		binary.BigEndian.PutUint32(exit, uint32(status))
 		ch.SendRequest("exit-status", false, exit)
 		return
 	}
-}
-
-func serveScp(command, root string, ch io.ReadWriter) error {
-	cmd, err := scp.ParseCommand(command)
-	if err != nil {
-		return err
-	}
-	cmd = cmd.Relative() // every path now names something under root
-	if cmd.Sink {        // scp -t: the client sends files
-		sink, err := scp.NewDirSink(filepath.Join(root, filepath.FromSlash(cmd.Paths[0])), scp.DirSinkOptions{Preserve: cmd.Preserve})
-		if err != nil {
-			return err
-		}
-		defer sink.Close()
-		return scp.ReceiveAll(ch, ch, scp.ReceiveOptions{Recursive: cmd.Recursive}, sink)
-	}
-	dir, err := os.OpenRoot(root) // scp -f: the client fetches files
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	fsys := dir.FS()
-	names, err := cmd.Expand(fsys)
-	if err != nil {
-		return err
-	}
-	return scp.SendFS(ch, ch, fsys, names, scp.SendOptions{Recursive: cmd.Recursive, Preserve: cmd.Preserve})
 }

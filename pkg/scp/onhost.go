@@ -24,15 +24,7 @@ func (c *Client) CopyOnHost(ctx context.Context, target string, sources ...strin
 		return err
 	}
 
-	operands := make([]string, 0, len(sources)+1)
-	for _, s := range sources {
-		if c.Glob {
-			operands = append(operands, quotePattern(s))
-		} else {
-			operands = append(operands, Quote(s))
-		}
-	}
-	operands = append(operands, Quote(target))
+	operands := append(c.remoteOperands(sources), Quote(target))
 
 	flags := "-q"
 	if c.Recursive {

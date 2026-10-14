@@ -16,6 +16,12 @@ type DirSinkOptions struct {
 	// received times, as "scp -p" does. New entries take their mode either way,
 	// less the umask.
 	Preserve bool
+
+	// Resume keeps the bytes an existing file already holds and writes only the
+	// rest: File's body must start where the file ends, the offset ResumeFrom
+	// reports. The classic protocol always sends a file whole, so this is for a
+	// sender that can start part-way, such as an SFTP download.
+	Resume bool
 }
 
 // DirSink is a Sink that writes to the local filesystem under one target, as
@@ -45,6 +51,10 @@ type openDir struct {
 }
 
 // NewDirSink returns a DirSink writing under target. Close it when done.
+//
+// target itself is opened as given, following any symlink on the way to it; only
+// what is written under it is held there. For a path a client chose, use
+// NewDirSinkIn, which finds the target inside a root as well.
 func NewDirSink(target string, opts DirSinkOptions) (*DirSink, error) {
 	s := &DirSink{opts: opts}
 	info, err := os.Stat(target)
@@ -61,6 +71,27 @@ func NewDirSink(target string, opts DirSinkOptions) (*DirSink, error) {
 	return s, nil
 }
 
+// NewDirSinkIn returns a DirSink writing to rel, a slash-separated path under
+// root. Unlike NewDirSink, the target itself is found inside root too, so a symlink
+// on the way to it can no more lead out of root than an entry can lead out of the
+// target. This is the one a server wants: rel is what a client asked for.
+func NewDirSinkIn(root *os.Root, rel string, opts DirSinkOptions) (*DirSink, error) {
+	s := &DirSink{opts: opts}
+	rel = filepath.FromSlash(rel)
+	info, err := root.Stat(rel)
+	switch {
+	case err == nil && info.IsDir():
+		s.root, err = root.OpenRoot(rel)
+	case err == nil || errors.Is(err, fs.ErrNotExist):
+		s.first = filepath.Base(rel)
+		s.root, err = root.OpenRoot(filepath.Dir(rel))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 // Close releases the target directory, and any directory entered and not left.
 func (s *DirSink) Close() error {
 	for _, d := range s.dirs {
@@ -69,6 +100,10 @@ func (s *DirSink) Close() error {
 	s.dirs = nil
 	return s.root.Close()
 }
+
+// ownerAll lets a directory's owner list, enter and add to it, which a DirSink
+// needs while it writes the directory's entries, whatever mode it ends with.
+const ownerAll = 0o700
 
 // maxPath is the longest path a DirSink writes under its target, the PATH_MAX of
 // Linux. OpenSSH's scp stops at the system's limit because it builds whole paths;
@@ -84,8 +119,9 @@ type place struct {
 	rel  string
 }
 
-// placeOf returns where an entry named name goes.
-func (s *DirSink) placeOf(name string) (place, error) {
+// placeOf returns where an entry named name goes. take marks the target's own
+// name as used, as File and EnterDir do; ResumeFrom only looks.
+func (s *DirSink) placeOf(name string, take bool) (place, error) {
 	if len(s.dirs) > 0 {
 		d := s.dirs[len(s.dirs)-1]
 		rel := path.Join(d.rel, name)
@@ -100,7 +136,7 @@ func (s *DirSink) placeOf(name string) (place, error) {
 	if s.used {
 		return place{}, fmt.Errorf("scp: %s is not a directory, so it takes only one entry", s.first)
 	}
-	s.used = true
+	s.used = take
 	return place{s.root, s.first, s.first}, nil
 }
 
@@ -111,22 +147,32 @@ func (s *DirSink) File(h Header, body io.Reader) error {
 	if h.Size < 0 {
 		return fmt.Errorf("scp: %s: negative size %d", h.Name, h.Size)
 	}
-	at, err := s.placeOf(h.Name)
+	at, err := s.placeOf(h.Name, true)
 	if err != nil {
 		return err
+	}
+	var offset int64
+	if s.opts.Resume {
+		if offset, err = existingSize(at, h); err != nil {
+			return err
+		}
 	}
 	file, err := at.root.OpenFile(at.name, os.O_WRONLY|os.O_CREATE, h.Mode)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	n, err := io.CopyN(file, body, h.Size)
+	_, err = file.Seek(offset, io.SeekStart)
+	var n int64
+	if err == nil {
+		n, err = io.CopyN(file, body, h.Size-offset)
+	}
 	if err == io.EOF {
-		err = fmt.Errorf("scp: %s: only %d of %d bytes arrived", at.rel, n, h.Size)
+		err = fmt.Errorf("scp: %s: only %d of %d bytes arrived", at.rel, offset+n, h.Size)
 	}
 	// Cut an existing longer file down to what was written, and never pad a short
 	// one out to the size it was meant to have.
-	if truncErr := file.Truncate(n); err == nil {
+	if truncErr := file.Truncate(offset + n); err == nil {
 		err = truncErr
 	}
 	if err != nil || !s.opts.Preserve {
@@ -140,10 +186,36 @@ func (s *DirSink) File(h Header, body io.Reader) error {
 	return err
 }
 
+// ResumeFrom reports where File would continue the file h describes, with Resume
+// set: the size of the file already there, or 0 when there is none. A file already
+// longer than h.Size is not resumed, and is an error.
+func (s *DirSink) ResumeFrom(h Header) (int64, error) {
+	at, err := s.placeOf(h.Name, false)
+	if err != nil {
+		return 0, err
+	}
+	return existingSize(at, h)
+}
+
+// existingSize is how much of the file h describes is already at at.
+func existingSize(at place, h Header) (int64, error) {
+	info, err := at.root.Stat(at.name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return 0, nil
+	case err != nil:
+		return 0, err
+	case info.Size() > h.Size:
+		return 0, fmt.Errorf("scp: %s: %d bytes here, more than the %d being copied; not resuming", at.rel, info.Size(), h.Size)
+	default:
+		return info.Size(), nil
+	}
+}
+
 // EnterDir creates the directory unless it exists, writable by its owner until it
 // is left so that its entries can be created, and opens it for them.
 func (s *DirSink) EnterDir(h Header) error {
-	at, err := s.placeOf(h.Name)
+	at, err := s.placeOf(h.Name, true)
 	if err != nil {
 		return err
 	}
@@ -152,7 +224,7 @@ func (s *DirSink) EnterDir(h Header) error {
 	case err == nil && !info.IsDir():
 		return fmt.Errorf("scp: %s: not a directory", at.rel)
 	case errors.Is(err, fs.ErrNotExist):
-		err = at.root.Mkdir(at.name, h.Mode|0o700)
+		err = at.root.Mkdir(at.name, h.Mode|ownerAll)
 	}
 	if err != nil {
 		return err

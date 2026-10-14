@@ -12,7 +12,7 @@ import (
 )
 
 // writeTree creates files under dir from a map of slash-separated paths to contents.
-func writeTree(t *testing.T, dir string, files map[string]string) {
+func writeTree(t testing.TB, dir string, files map[string]string) {
 	t.Helper()
 	for name, content := range files {
 		p := filepath.Join(dir, filepath.FromSlash(name))
@@ -329,10 +329,10 @@ func TestDirSinkPreserveAppliesDirectoryModeAndTimesOnLeaving(t *testing.T) {
 
 	dir, _ := os.Stat(filepath.Join(target, "dir"))
 	file, _ := os.Stat(filepath.Join(target, "dir", "f"))
-	if dir.Mode().Perm() != 0o750 || dir.ModTime().Unix() != modTime.Unix() {
+	if (unixModes && dir.Mode().Perm() != 0o750) || dir.ModTime().Unix() != modTime.Unix() {
 		t.Errorf("dir: mode %v, mtime %v", dir.Mode().Perm(), dir.ModTime())
 	}
-	if file.Mode().Perm() != 0o600 || file.ModTime().Unix() != modTime.Unix() {
+	if (unixModes && file.Mode().Perm() != 0o600) || file.ModTime().Unix() != modTime.Unix() {
 		t.Errorf("file: mode %v, mtime %v", file.Mode().Perm(), file.ModTime())
 	}
 }

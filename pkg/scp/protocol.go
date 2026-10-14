@@ -19,6 +19,16 @@ const (
 	statusFatal byte = 2 // the program gives up
 )
 
+// Limits on what a control line may carry.
+const (
+	// maxMode is the most a mode may be: the permission bits, with setuid, setgid
+	// and the sticky bit.
+	maxMode = 0o7777
+	// maxMicroseconds is the most a time line's microseconds may be, below one
+	// whole second.
+	maxMicroseconds = 999_999
+)
+
 // ErrProtocol reports a peer that did not follow the protocol.
 var ErrProtocol = errors.New("scp: protocol violation")
 
@@ -64,7 +74,13 @@ func (h Header) timesLine() string {
 	if atime.IsZero() {
 		atime = mtime
 	}
-	return fmt.Sprintf("T%d %d %d %d", mtime.Unix(), mtime.Nanosecond()/1000, atime.Unix(), atime.Nanosecond()/1000)
+	return fmt.Sprintf("T%d %d %d %d", mtime.Unix(), microseconds(mtime), atime.Unix(), microseconds(atime))
+}
+
+// microseconds is the part of t below a whole second, in microseconds, as a time
+// line carries it.
+func microseconds(t time.Time) int {
+	return t.Nanosecond() / int(time.Microsecond)
 }
 
 // parseTimes reads a time line, without its newline, into h's times.
@@ -79,13 +95,13 @@ func parseTimes(line string, h *Header) error {
 	var n [4]int64
 	for i, f := range fields {
 		v, err := strconv.ParseInt(f, 10, 64)
-		if err != nil || v < 0 || (i%2 == 1 && v > 999999) {
+		if err != nil || v < 0 || (i%2 == 1 && v > maxMicroseconds) {
 			return fmt.Errorf("%w: malformed time line %q", ErrProtocol, line)
 		}
 		n[i] = v
 	}
-	h.ModTime = time.Unix(n[0], n[1]*1000)
-	h.AccessTime = time.Unix(n[2], n[3]*1000)
+	h.ModTime = time.Unix(n[0], n[1]*int64(time.Microsecond))
+	h.AccessTime = time.Unix(n[2], n[3]*int64(time.Microsecond))
 	return nil
 }
 
@@ -105,7 +121,7 @@ func parseHeader(line string) (Header, error) {
 		return Header{}, fmt.Errorf("%w: malformed control line %q", ErrProtocol, line)
 	}
 	mode, err := strconv.ParseUint(parts[0], 8, 32)
-	if err != nil || mode > 0o7777 {
+	if err != nil || mode > maxMode {
 		return Header{}, fmt.Errorf("%w: bad mode in %q", ErrProtocol, line)
 	}
 	size, err := strconv.ParseInt(parts[1], 10, 64)
@@ -116,9 +132,10 @@ func parseHeader(line string) (Header, error) {
 }
 
 // validName refuses a name the receiving end would refuse, or would read as more
-// than one file name: a directory part, "." or "..", or a line break.
+// than one file name: a directory part, "." or "..", or a line break. Which
+// characters make a directory part depends on the system: see nameBreaks.
 func validName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\n") {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, nameBreaks) {
 		return fmt.Errorf("scp: %q cannot be sent as a file name", name)
 	}
 	return nil

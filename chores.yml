@@ -23,6 +23,12 @@ tasks:
     cmds:
       - scripts/fuzz.sh 60s
 
+  bench:
+    desc: Run the throughput benchmarks of the library and the SFTP module
+    cmds:
+      - go test -run '^$' -bench . ./pkg/scp
+      - sh -c "cd pkg/sftp && go test -run '^$' -bench . ./..."
+
   coverage:
     desc: Run the tests with coverage and print the total
     cmds:
