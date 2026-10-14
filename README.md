@@ -296,6 +296,26 @@ Four layers, all run by CI:
 CI also fails unless the tests cover every statement in `pkg/`
 (`scripts/coverage-gate.sh`), naming whatever they miss.
 
+## Releasing
+
+The library and the SFTP module are released together: `pkg/sftp` requires the
+library version it is released with, and both tags go on one commit.
+`scripts/release.sh` does it in three steps:
+
+```
+scripts/release.sh prepare v0.8.0 v0.3.0  # on a branch from main, for a pull request
+scripts/release.sh tag v0.8.0 v0.3.0      # on main once that is merged
+scripts/release.sh verify v0.8.0 v0.3.0   # any time after
+```
+
+`prepare` dates the changelog's Unreleased section and points `pkg/sftp` and the
+SFTP example at the new versions. `tag` tags both modules, pushes the tags,
+publishes the GitHub releases with the changelog's notes, and verifies.
+`verify` checks the release as a program that requires it sees it, through the
+module proxy alone: both versions at one commit, `pkg/sftp` requiring this
+library version, and new programs using each module building, with no
+`github.com/pkg/sftp` in one that uses only `pkg/scp`.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
