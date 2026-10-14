@@ -18,46 +18,26 @@ import (
 // connection, with the remote host's scp program as the other end of each
 // transfer. Each transfer opens its own session on the connection, so one Client
 // serves any number of them, one after another or at once.
+//
+// Of the shared Options, Preserve has an upload send the header's times and the
+// remote reapply the mode to an existing file, and has a download return the
+// remote file's times in its header; MaxSize refuses a download that declares
+// more bytes; and Limit counts both directions of a transfer together.
 type Client struct {
 	// newSession opens a session on the connection. A field so a test can give the
 	// client scripted sessions that fail where a live one would not.
 	newSession func() (session, error)
 
+	Options
+
 	// Program is the command that starts scp on the remote host; "scp" when empty.
 	// It is sent as written, so a path in it must already be quoted.
 	Program string
-
-	// MaxSize, when positive, refuses a download that declares more bytes, before
-	// any of the file is transferred.
-	MaxSize int64
-
-	// Preserve keeps file times and modes, as "scp -p" does: an upload sends the
-	// header's times and the remote reapplies the mode to an existing file; a
-	// download returns the remote file's times in its header.
-	Preserve bool
-
-	// Recursive lets CopyTo and CopyFrom copy directories with their contents, as
-	// "scp -r" does.
-	Recursive bool
-
-	// Glob lets the remote sources given to CopyFrom hold wildcards (*, ? and
-	// [...]) for the remote shell to expand, as scp's remote paths do. The rest of
-	// each source stays quoted.
-	Glob bool
 
 	// AnyNames lets CopyFrom accept top-level names other than the ones asked
 	// for, as "scp -T" does. A name that could reach outside the target is refused
 	// whatever this says.
 	AnyNames bool
-
-	// Limit, when positive, caps each transfer at that many bytes per second, both
-	// directions together, as "scp -l" does. scp's -l counts Kbit/s, so -l n is a
-	// Limit of n*1000/8.
-	Limit int64
-
-	// Progress, when set, is told how each file of every transfer moves: as it
-	// starts and as its bytes go, with its path in the transfer and its size.
-	Progress Progress
 
 	// ForwardAgent asks every session for agent forwarding, as "scp -A" does, so
 	// that the host CopyOnHost runs scp on can log in to the other host with the

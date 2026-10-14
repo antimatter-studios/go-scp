@@ -225,6 +225,37 @@ func TestAutoPicksTheProtocolTheHostOffers(t *testing.T) {
 	}
 }
 
+// Options set on Auto reach whichever client a copy uses, without being set on
+// either.
+func TestAutoTakesOptionsOnce(t *testing.T) {
+	for subsystem, protocol := range map[string]string{"serve": "sftp", "refuse": "scp"} {
+		t.Run(protocol, func(t *testing.T) {
+			a := NewAuto((&sshHost{subsystem: subsystem}).dial(t))
+			a.Recursive = true
+			log := newProgressLog()
+			a.Progress = log.record
+			local, remote, back := t.TempDir(), t.TempDir(), t.TempDir()
+			writeTree(t, local, tree)
+
+			if err := a.CopyTo(t.Context(), remote, filepath.Join(local, "project")); err != nil {
+				t.Fatalf("CopyTo: %v", err)
+			}
+			if err := a.CopyFrom(t.Context(), back, filepath.Join(remote, "project")); err != nil {
+				t.Fatalf("CopyFrom: %v", err)
+			}
+			if got := readTree(t, back); !reflect.DeepEqual(got, tree) {
+				t.Errorf("copied back %v\nwant %v", got, tree)
+			}
+			if want := sizes(tree); !reflect.DeepEqual(log.last, want) {
+				t.Errorf("progress finished at %v\nwant %v", log.last, want)
+			}
+			if a.SFTP.Recursive || a.SCP.Recursive || a.SFTP.Progress != nil || a.SCP.Progress != nil {
+				t.Error("Auto changed the options of its clients")
+			}
+		})
+	}
+}
+
 // A failure over SFTP is the copy's own, not a reason to try the other protocol.
 func TestAutoReturnsAnSFTPFailureAsItIs(t *testing.T) {
 	host := &sshHost{subsystem: "serve"}

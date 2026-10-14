@@ -179,7 +179,7 @@ type sender struct {
 // names the file in that report and to progress. It returns the file's own
 // failure, which the transfer survives, separately from an error that ends it.
 func (s sender) file(h Header, body io.Reader, label string) (failure, err error) {
-	body = s.progress.track(label, h.Size, body)
+	body = s.progress.Track(label, 0, h.Size, body)
 	if err := sendTimes(s.r, s.out, h); err != nil {
 		return entryAnswer(err)
 	}

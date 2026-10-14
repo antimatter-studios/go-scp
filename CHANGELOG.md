@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `scp.Options` holds the settings both protocols share: `Recursive`,
+  `Preserve`, `Glob`, `Limit`, `MaxSize` and `Progress`. `scp.Client` and
+  `sftp.Client` embed it, so setting a field works as before, but a composite
+  literal naming one of them no longer compiles.
+- `sftp.Auto` embeds `scp.Options` too and applies them to whichever client a
+  copy uses, so they are set once rather than on both clients.
+- `sftp.Client` honours `Progress` in `CopyTo`, `CopyFrom` and `CopyBetween`,
+  naming each file by its path in the copy as package scp does. A resumed file
+  starts from the bytes already there.
+- `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
+  or `Sink` of a caller's own.
+
 ## v0.7.0 — 2026-10-14
 
 The SFTP module is released alongside as `pkg/sftp/v0.2.0`, which needs this
