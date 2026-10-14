@@ -82,9 +82,11 @@ func (c *Client) nameCheck(sources []string) nameCheck {
 	if c.AnyNames {
 		return nil
 	}
-	wanted := make([]string, len(sources))
-	for i, s := range sources {
-		wanted[i] = path.Base(s)
+	// The last element of each source, split as a Unix host splits it, and as a
+	// Windows host would.
+	var wanted []string
+	for _, s := range sources {
+		wanted = append(wanted, path.Base(s), remoteBase(s))
 	}
 	return func(name string, depth int) error {
 		if depth > 0 {
@@ -102,6 +104,12 @@ func (c *Client) nameCheck(sources []string) nameCheck {
 		}
 		return fmt.Errorf("scp: the remote sent %q, which was not asked for", name)
 	}
+}
+
+// remoteBase is the last element of a remote path, split at a slash or at a
+// backslash, since the remote host may be either kind.
+func remoteBase(p string) string {
+	return path.Base(strings.ReplaceAll(p, `\`, "/"))
 }
 
 // remoteOperands quotes remote paths for the remote shell, each as one word, or,

@@ -50,7 +50,11 @@ func TestDownloadReturnsTheHeader(t *testing.T) {
 
 	h, err := c.Download(t.Context(), name, &buf)
 
-	if err != nil || buf.String() != "hello" || h != (Header{Mode: 0o600, Size: 5, Name: "notes.txt"}) {
+	want := Header{Mode: 0o600, Size: 5, Name: "notes.txt"}
+	if !unixModes {
+		want.Mode = h.Mode
+	}
+	if err != nil || buf.String() != "hello" || h != want {
 		t.Fatalf("Download = (%+v, %v), body %q", h, err, buf.String())
 	}
 }
