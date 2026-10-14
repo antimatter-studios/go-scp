@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"testing"
 
 	pkgsftp "github.com/pkg/sftp"
@@ -33,6 +34,10 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+// unixModes reports whether files here keep Unix permission bits. Windows keeps
+// only a read-only flag, so a test of modes has nothing to check there.
+var unixModes = runtime.GOOS != "windows"
 
 type stdio struct {
 	io.Reader

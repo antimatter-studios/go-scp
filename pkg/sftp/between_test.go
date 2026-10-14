@@ -27,7 +27,7 @@ func TestCopyBetweenOverSFTP(t *testing.T) {
 	if got := readTree(t, second); !reflect.DeepEqual(got, tree) {
 		t.Fatalf("second host holds %v\nwant %v", got, tree)
 	}
-	if info, err := os.Stat(filepath.Join(second, "project", "README")); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(filepath.Join(second, "project", "README")); err != nil || (unixModes && info.Mode().Perm() != 0o600) {
 		t.Errorf("README: mode %v (%v), want 0600 preserved", info.Mode().Perm(), err)
 	}
 }

@@ -49,6 +49,9 @@ func TestCopyToSkipsWhatItCannotRead(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads anything")
 	}
+	if !unixModes {
+		t.Skip("mode 000 locks nothing on Windows")
+	}
 	local, remote := t.TempDir(), t.TempDir()
 	writeTree(t, local, map[string]string{"locked/x": "X", "secret": "S", "ok": "OK"})
 	for _, p := range []string{"locked", "secret"} {
