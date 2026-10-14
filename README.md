@@ -41,10 +41,11 @@ go get github.com/antimatter-studios/go-scp/pkg/sftp
 import "github.com/antimatter-studios/go-scp/pkg/sftp"
 ```
 
-`sftp.Client` has the same `CopyTo` and `CopyFrom`, with `Recursive`, `Preserve`
-and `Glob`, and reaches hosts that offer only the SFTP subsystem, with no shell
+`sftp.Client` has the same `CopyTo` and `CopyFrom`, with the same
+`scp.Options` (`Recursive`, `Preserve`, `Glob`, `Limit`, `MaxSize` and
+`Progress`), and reaches hosts that offer only the SFTP subsystem, with no shell
 and no `scp` program. `sftp.Auto` uses SFTP when the host offers it and the
-classic protocol when it does not. It is built on
+classic protocol when it does not; set the options once, on `Auto`. It is built on
 [`github.com/pkg/sftp`](https://github.com/pkg/sftp) (BSD-2-Clause), and needs
 `golang.org/x/crypto` v0.54.0 or later.
 
@@ -203,9 +204,9 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | Resume a copy left part-way | ✅ Supported | `sftp.Client.Resume`, as sftp's `reget` and `reput` do (not an `scp` option; the classic protocol always sends a file whole) | |
 | `-C` compression | ❌ Not supported | `golang.org/x/crypto/ssh` has no compression, and adding it there waits on partial flush in `compress/flate` ([golang/go#31514](https://github.com/golang/go/issues/31514)) | |
 
-Progress needs no `scp` option: set `Client.Progress` and it is told as each
-file of every transfer starts and as its bytes move, with the file's path in the
-transfer and its size. See [progress](examples/progress/main.go).
+Progress needs no `scp` option: set `Progress` on either client, or on
+`sftp.Auto`, and it is told as each file of every transfer starts and as its
+bytes move, with the file's path in the transfer and its size. See [progress](examples/progress/main.go).
 
 ### Connection options
 

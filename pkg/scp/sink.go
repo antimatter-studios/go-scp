@@ -224,7 +224,7 @@ func (rc *receiving) body(h Header) (failure, err error) {
 	}
 	body := io.LimitReader(r, h.Size)
 	name := path.Join(path.Join(rc.dirs...), h.Name)
-	fileErr := rc.sink.File(h, rc.opts.Progress.track(name, h.Size, body))
+	fileErr := rc.sink.File(h, rc.opts.Progress.Track(name, 0, h.Size, body))
 	if _, err := io.Copy(io.Discard, body); err != nil {
 		return nil, fmt.Errorf("%w: reading the body of %q: %w", ErrProtocol, h.Name, err)
 	}

@@ -332,7 +332,7 @@ func TestLeavingADirectoryThatFailsEndsTheCopy(t *testing.T) {
 	defer sink.Close()
 
 	err = client.with(t.Context(), func(conn *pkgsftp.Client) error {
-		_, err := client.copying(conn, leaveFails{sink}).fetchDir("/d", scp.Header{Mode: 0o755, Name: "d"})
+		_, err := client.copying(conn, leaveFails{sink}).fetchDir("/d", "d", scp.Header{Mode: 0o755, Name: "d"})
 		return err
 	})
 	if !errors.Is(err, errFault) {

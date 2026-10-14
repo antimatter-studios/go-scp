@@ -60,7 +60,7 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 			if intoDir {
 				remote = path.Join(target, filepath.Base(src))
 			}
-			if err := cp.put(src, remote); err != nil {
+			if err := cp.put(src, remote, filepath.Base(src)); err != nil {
 				failures = append(failures, err)
 			}
 		}
@@ -68,23 +68,24 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 	})
 }
 
-// put copies one local file or directory to remote.
-func (cp *copying) put(local, remote string) error {
+// put copies one local file or directory to remote; name is its path in the copy,
+// as Progress is told it.
+func (cp *copying) put(local, remote, name string) error {
 	info, err := os.Stat(local)
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
 	}
 	switch {
 	case info.IsDir() && cp.Recursive:
-		return cp.putDir(local, remote, info)
+		return cp.putDir(local, remote, name, info)
 	case info.Mode().IsRegular():
-		return cp.putFile(local, remote, info)
+		return cp.putFile(local, remote, name, info)
 	default:
 		return fmt.Errorf("sftp: %s: not a regular file", local)
 	}
 }
 
-func (cp *copying) putFile(local, remote string, info fs.FileInfo) error {
+func (cp *copying) putFile(local, remote, name string, info fs.FileInfo) error {
 	in, err := os.Open(local)
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
@@ -98,10 +99,10 @@ func (cp *copying) putFile(local, remote string, info fs.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	return w.writeFile(remote, h, cp.pace.reader(in), offset)
+	return w.writeFile(remote, h, cp.Progress.Track(name, offset, h.Size, cp.pace.reader(in)), offset)
 }
 
-func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
+func (cp *copying) putDir(local, remote, name string, info fs.FileInfo) error {
 	entries, err := os.ReadDir(local)
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
@@ -113,7 +114,7 @@ func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
 	}
 	var failures []error
 	for _, e := range entries {
-		if err := cp.put(filepath.Join(local, e.Name()), path.Join(remote, e.Name())); err != nil {
+		if err := cp.put(filepath.Join(local, e.Name()), path.Join(remote, e.Name()), path.Join(name, e.Name())); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -172,7 +173,7 @@ func (cp *copying) fetchAll(sources []string) error {
 			continue
 		}
 		for _, name := range names {
-			failure, err := cp.fetch(name)
+			failure, err := cp.fetch(name, "")
 			if err != nil {
 				return errors.Join(append(failures, err)...)
 			}
@@ -199,9 +200,10 @@ func (cp *copying) expand(src string) ([]string, error) {
 	return matches, nil
 }
 
-// fetch copies one remote file or directory into the sink. It returns the entry's
-// own failure, which the copy survives, separately from an error that ends it.
-func (cp *copying) fetch(remote string) (failure, err error) {
+// fetch copies one remote file or directory into the sink, from the directory whose
+// path in the copy is parent; "" for the top. It returns the entry's own failure,
+// which the copy survives, separately from an error that ends it.
+func (cp *copying) fetch(remote, parent string) (failure, err error) {
 	info, err := cp.conn.Stat(remote)
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err), nil
@@ -217,9 +219,10 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 		return fmt.Errorf("sftp: %s: %w", remote, err), nil
 	}
 
+	name := path.Join(parent, h.Name)
 	switch {
 	case info.IsDir() && cp.Recursive:
-		return cp.fetchDir(remote, h)
+		return cp.fetchDir(remote, name, h)
 	case info.Mode().IsRegular():
 		if cp.MaxSize > 0 && h.Size > cp.MaxSize {
 			return fmt.Errorf("sftp: %s is %d bytes, more than the %d this client accepts", remote, h.Size, cp.MaxSize), nil
@@ -237,7 +240,7 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 		// so they go out together rather than one per round trip.
 		rest := io.NewSectionReader(file, offset, h.Size-offset)
 		body := bufio.NewReaderSize(cp.pace.reader(rest), cp.readAhead())
-		if err := cp.sink.File(h, body); err != nil {
+		if err := cp.sink.File(h, cp.Progress.Track(name, offset, h.Size, body)); err != nil {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
 		return nil, nil
@@ -246,7 +249,7 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 	}
 }
 
-func (cp *copying) fetchDir(remote string, h scp.Header) (failure, err error) {
+func (cp *copying) fetchDir(remote, name string, h scp.Header) (failure, err error) {
 	entries, err := cp.conn.ReadDir(remote)
 	if err != nil {
 		return fmt.Errorf("sftp: %s: %w", remote, err), nil
@@ -262,7 +265,7 @@ func (cp *copying) fetchDir(remote string, h scp.Header) (failure, err error) {
 			failures = append(failures, fmt.Errorf("sftp: %s: the server listed %w", remote, err))
 			continue
 		}
-		entryFailure, err := cp.fetch(path.Join(remote, e.Name()))
+		entryFailure, err := cp.fetch(path.Join(remote, e.Name()), name)
 		if err != nil {
 			return nil, err
 		}
