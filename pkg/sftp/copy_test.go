@@ -167,7 +167,8 @@ func TestCopyFromWithWildcards(t *testing.T) {
 	c := programClient(t, remote)
 	c.Glob = true
 
-	if err := c.CopyFrom(t.Context(), back, filepath.Join(remote, "logs", "*.txt")); err != nil {
+	// SFTP paths are slash-separated, which a Windows path is not.
+	if err := c.CopyFrom(t.Context(), back, filepath.ToSlash(filepath.Join(remote, "logs", "*.txt"))); err != nil {
 		t.Fatalf("CopyFrom: %v", err)
 	}
 	if got := readTree(t, back); !reflect.DeepEqual(got, map[string]string{"a.txt": "A", "b.txt": "B"}) {
