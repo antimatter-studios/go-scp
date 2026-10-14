@@ -18,7 +18,8 @@ import (
 //
 // src's settings decide the copy: Recursive copies directories, Preserve keeps
 // times and modes, Glob matches wildcards in the sources, MaxSize refuses a larger
-// file, and Limit paces the copy. With more than one source, or with Glob, target
+// file, Limit paces the copy, and Atomic has each file replace its target whole, as
+// CopyTo does. With more than one source, or with Glob, target
 // must be an existing directory on the second host; otherwise target is written
 // into when it is a directory and as the copy itself when it is not, as CopyFrom
 // does locally.
@@ -39,7 +40,7 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 				return fmt.Errorf("sftp: %s: must be an existing directory to take several files", target)
 			}
 			sink := &remoteSink{
-				w:       remoteWriter{conn: to, preserve: src.Preserve},
+				w:       remoteWriter{conn: to, preserve: src.Preserve, atomic: src.Atomic},
 				target:  target,
 				intoDir: intoDir,
 			}

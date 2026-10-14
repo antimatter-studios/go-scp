@@ -15,10 +15,14 @@ import (
 // its keys, its known hosts, and which protocol its scp speaks. Recursive copies
 // directories, Preserve keeps times and modes, and Glob leaves wildcards in the
 // sources for the connected host's shell. Limit and MaxSize do not apply, because
-// the data does not pass through here.
+// the data does not pass through here, and Atomic cannot: CopyOnHost refuses to run
+// with it set, since the other host's scp writes in place.
 func (c *Client) CopyOnHost(ctx context.Context, target string, sources ...string) error {
 	if len(sources) == 0 {
 		return errors.New("scp: no sources to copy")
+	}
+	if c.Atomic {
+		return errWritesInPlace
 	}
 	if err := ctx.Err(); err != nil {
 		return err

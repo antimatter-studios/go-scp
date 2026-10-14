@@ -108,10 +108,14 @@ func (c *Client) ReadFile(ctx context.Context, remotePath string) ([]byte, error
 // Upload copies h.Size bytes read from body to remotePath, creating the file with
 // h.Mode, less the remote umask, when it does not exist. An existing file is
 // written over in place and cut to the new length, keeping its owner and
-// permissions; that is what the remote scp does, and it is not atomic. With
-// Preserve, the remote also applies h.Mode to an existing file, and h.ModTime and
-// h.AccessTime when they are set. h.Name is not used: the name is remotePath's.
+// permissions; that is what the remote scp does, and it is not atomic, so Upload
+// refuses to run with Atomic set. With Preserve, the remote also applies h.Mode
+// to an existing file, and h.ModTime and h.AccessTime when they are set. h.Name
+// is not used: the name is remotePath's.
 func (c *Client) Upload(ctx context.Context, remotePath string, h Header, body io.Reader) error {
+	if c.Atomic {
+		return errWritesInPlace
+	}
 	h.Mode = h.Mode.Perm()
 	h.Name = remoteBase(remotePath)
 	if err := validName(h.Name); err != nil {

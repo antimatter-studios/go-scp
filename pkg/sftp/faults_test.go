@@ -101,6 +101,16 @@ func (f *faults) Filecmd(r *pkgsftp.Request) error {
 	return f.mem.FileCmd.Filecmd(r)
 }
 
+// PosixRename replaces the target, as posix-rename@openssh.com does. Without it
+// the request server would take the extension for a plain Rename, which refuses
+// an existing target.
+func (f *faults) PosixRename(r *pkgsftp.Request) error {
+	if f.fails(r) {
+		return errFault
+	}
+	return f.mem.FileCmd.(pkgsftp.PosixRenameFileCmder).PosixRename(r)
+}
+
 func (f *faults) Filelist(r *pkgsftp.Request) (pkgsftp.ListerAt, error) {
 	if f.fails(r) {
 		return nil, errFault
