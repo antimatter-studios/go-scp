@@ -29,49 +29,75 @@ func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	b := betweenHosts{src: src, dst: dst, sources: sources, target: target}
+	fetch, store, err := b.start(ctx)
+	if err != nil {
+		return err
+	}
+	defer fetch.close()
+	defer store.close()
+	copyErr := b.copy(fetch, store)
+	return finish(ctx, copyErr, fetch, store)
+}
 
-	operands := src.remoteOperands(sources)
+// betweenHosts is one copy from the host src reaches to the host dst reaches.
+type betweenHosts struct {
+	src, dst *Client
+	sources  []string
+	target   string
+}
+
+// start runs "scp -f" on the first host and "scp -t" on the second, with the flags
+// the copy needs on each.
+func (b betweenHosts) start(ctx context.Context) (fetch, store *proc, err error) {
 	fetchFlags, storeFlags := "-f", "-t"
-	if src.Recursive {
+	if b.src.Recursive {
 		fetchFlags, storeFlags = "-r "+fetchFlags, "-r "+storeFlags
 	}
-	if len(sources) > 1 || src.Glob {
+	if len(b.sources) > 1 || b.src.Glob {
 		storeFlags = "-d " + storeFlags
 	}
 	// The receiving end runs with the sending end's -p, so it expects the time
 	// lines it will be given.
-	storer := *dst
-	storer.Preserve = src.Preserve
+	storer := *b.dst
+	storer.Preserve = b.src.Preserve
 
-	fetch, err := src.start(ctx, src.command(fetchFlags, operands...))
+	fetch, err = b.src.start(ctx, b.src.command(fetchFlags, b.src.remoteOperands(b.sources)...))
 	if err != nil {
-		return fmt.Errorf("scp: starting the fetch: %w", err)
+		return nil, nil, fmt.Errorf("scp: starting the fetch: %w", err)
 	}
-	defer fetch.close()
-	store, err := storer.start(ctx, storer.command(storeFlags, Quote(target)))
+	store, err = storer.start(ctx, storer.command(storeFlags, Quote(b.target)))
 	if err != nil {
-		return fmt.Errorf("scp: starting the store: %w", err)
+		fetch.close()
+		return nil, nil, fmt.Errorf("scp: starting the store: %w", err)
 	}
-	defer store.close()
+	return fetch, store, nil
+}
 
-	copyErr := func() error {
-		toStore := forwardSink{r: bufio.NewReader(store.stdout), w: store.stdin}
-		// The receiving end says it is ready before anything is sent to it.
-		if err := readStatus(toStore.r); err != nil {
-			return err
-		}
-		var in io.Reader = fetch.stdout
-		var back io.Writer = fetch.stdin
-		if src.Limit > 0 {
-			// Every byte of the copy comes from the first host, so pacing that
-			// side paces the whole copy.
-			pace := newLimiter(src.Limit)
-			in, back = limitedReader{r: fetch.stdout, l: pace}, limitedWriter{w: fetch.stdin, l: pace}
-		}
-		opts := ReceiveOptions{MaxSize: src.MaxSize, Recursive: src.Recursive, Progress: src.Progress}
-		return (&receiving{r: bufio.NewReader(in), out: back, opts: opts, sink: toStore, check: src.nameCheck(sources)}).run()
-	}()
+// copy takes each entry from the first host and gives it to the second as it
+// arrives.
+func (b betweenHosts) copy(fetch, store *proc) error {
+	toStore := forwardSink{r: bufio.NewReader(store.stdout), w: store.stdin}
+	// The receiving end says it is ready before anything is sent to it.
+	if err := readStatus(toStore.r); err != nil {
+		return err
+	}
+	var in io.Reader = fetch.stdout
+	var back io.Writer = fetch.stdin
+	if b.src.Limit > 0 {
+		// Every byte of the copy comes from the first host, so pacing that side
+		// paces the whole copy.
+		pace := newLimiter(b.src.Limit)
+		in, back = limitedReader{r: fetch.stdout, l: pace}, limitedWriter{w: fetch.stdin, l: pace}
+	}
+	opts := ReceiveOptions{MaxSize: b.src.MaxSize, Recursive: b.src.Recursive, Progress: b.src.Progress}
+	rc := &receiving{r: bufio.NewReader(in), out: back, opts: opts, sink: toStore, check: b.src.nameCheck(b.sources)}
+	return rc.run()
+}
 
+// finish ends both sides of a copy between hosts and puts its result together:
+// the copy's own error, and what either host reported, in its own words.
+func finish(ctx context.Context, copyErr error, fetch, store *proc) error {
 	// Both ends are done once their input closes.
 	fetch.stdin.Close()
 	store.stdin.Close()
