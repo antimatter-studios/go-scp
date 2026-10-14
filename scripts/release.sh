@@ -6,13 +6,14 @@
 # Usage: scripts/release.sh prepare|tag|verify <version> <sftp-version>
 #
 #   prepare  On a release branch made from main: dates the changelog's Unreleased
-#            section as <version>, points pkg/sftp and the SFTP example at the new
-#            versions, and commits that for a pull request.
-#   tag      On main, once that pull request is merged: tags both modules on HEAD,
-#            pushes the tags, publishes the GitHub releases with the changelog's
-#            notes, and verifies.
-#   verify   Checks a published release as a program that requires it sees it,
-#            through the module proxy alone.
+#            section as <version>, writes the README's Changelog section from it,
+#            points pkg/sftp and the SFTP example at the new versions, and commits
+#            that for a pull request.
+#   tag      On main, once that pull request is merged: tags both modules on HEAD
+#            and pushes the tags. The Release workflow then publishes a GitHub
+#            release for each, with the changelog's notes.
+#   verify   Checks a published release: its GitHub releases, and the modules as a
+#            program that requires them sees them, through the module proxy alone.
 #
 # For example: scripts/release.sh prepare v0.8.0 v0.3.0
 set -euo pipefail
@@ -35,14 +36,15 @@ for v in "$version" "$sftp_version"; do
 done
 sftp_tag=pkg/sftp/$sftp_version
 
-# notes prints the changelog's section for the version, without its heading or
-# the blank lines around it.
-notes() {
+# documented fails unless CHANGELOG.md has a section for the version with
+# something in it. The Release workflow writes the release notes from it.
+documented() {
 	awk -v heading="## $version" '
 		index($0, heading) == 1 && (length($0) == length(heading) || substr($0, length(heading) + 1, 1) == " ") { found = 1; next }
 		found && /^## / { exit }
-		found { print }
-	' CHANGELOG.md | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+		found && /[^[:space:]]/ { written = 1 }
+		END { exit !written }
+	' CHANGELOG.md || fail "CHANGELOG.md has no section for $version"
 }
 
 # required prints the version of the library that the go.mod on stdin requires.
@@ -59,7 +61,9 @@ prepare() {
 	[ "$(git branch --show-current)" != main ] || fail "prepare runs on a release branch made from main, not on main"
 	clean
 	if grep -q '^## Unreleased$' CHANGELOG.md; then
-		local dated="## $version — $(date -u +%Y-%m-%d)"
+		local today dated
+		today="$(date -u +%Y-%m-%d)"
+		dated="## $version — $today"
 		local alongside="The SFTP module is released alongside as \`$sftp_tag\`, which needs this"
 		awk -v dated="$dated" -v alongside="$alongside" '
 			!done && $0 == "## Unreleased" { print dated; print ""; print alongside; print "version."; done = 1; next }
@@ -67,14 +71,15 @@ prepare() {
 		' CHANGELOG.md >CHANGELOG.md.new
 		mv CHANGELOG.md.new CHANGELOG.md
 	fi
-	[ -n "$(notes)" ] || fail "CHANGELOG.md has no Unreleased section and none for $version"
+	documented
+	scripts/changelog-readme.sh
 
 	(cd pkg/sftp && go mod edit -require="$module@$version")
 	(cd examples/sftp && go mod edit -require="$module@$version" -require="$sftp_module@$sftp_version")
 	(cd pkg/sftp && go build ./...)
 	(cd examples/sftp && go build ./...)
-	git add CHANGELOG.md pkg/sftp/go.mod examples/sftp/go.mod
-	git commit -q -m "Release $version, and pkg/sftp $sftp_version on it" -m "- Date the changelog section $version and note the SFTP module's $sftp_version alongside.
+	git add CHANGELOG.md README.md pkg/sftp/go.mod examples/sftp/go.mod
+	git commit -q -m "Release $version, and pkg/sftp $sftp_version on it" -m "- Date the changelog section $version, note the SFTP module's $sftp_version alongside, and write the README's Changelog section from it.
 - pkg/sftp requires the library at $version, and the SFTP example requires both at their new versions."
 	echo "Committed the release of $version and $sftp_tag; open a pull request for it."
 }
@@ -85,17 +90,13 @@ tag() {
 	git fetch -q origin main
 	[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || fail "main is not at origin/main; pull first"
 	[ "$(required <pkg/sftp/go.mod)" = "$version" ] || fail "pkg/sftp requires the library at $(required <pkg/sftp/go.mod), not $version: run prepare first"
-	local body
-	body="$(notes)"
-	[ -n "$body" ] || fail "CHANGELOG.md has no section for $version"
+	documented
 
 	git tag -a "$version" -m "$version"
 	git tag -a "$sftp_tag" -m "$sftp_tag"
 	git push -q origin "$version" "$sftp_tag"
-	gh release create "$version" -R "$repo" --verify-tag --title "$version" --notes "$body"
-	gh release create "$sftp_tag" -R "$repo" --verify-tag --latest=false --title "pkg/sftp $sftp_version" \
-		--notes "The SFTP module, released alongside $version, which it requires. See $version for what changed."
-	verify
+	echo "Pushed $version and $sftp_tag. The Release workflow publishes their GitHub releases;"
+	echo "once it has: scripts/release.sh verify $version $sftp_version"
 }
 
 # origin prints the commit the proxy has a module's version at.
@@ -119,6 +120,12 @@ consumer() {
 }
 
 verify() {
+	local tag
+	for tag in "$version" "$sftp_tag"; do
+		gh release view "$tag" --repo "$repo" --json body --jq .body | grep -q . ||
+			fail "$tag has no GitHub release with notes; the Release workflow publishes one when the tag is pushed"
+	done
+
 	local lib_commit sftp_commit
 	lib_commit="$(origin "$module" "$version")"
 	sftp_commit="$(origin "$sftp_module" "$sftp_version")"
@@ -138,7 +145,7 @@ verify() {
 	consumer "$work/scp" "$version" "$module/pkg/scp" scp.NewClient || fail "a program using pkg/scp@$version does not build"
 	! grep -q 'github.com/pkg/sftp' "$work/scp/go.sum" || fail "a program using only pkg/scp@$version depends on github.com/pkg/sftp"
 	consumer "$work/sftp" "$sftp_version" "$sftp_module" sftp.NewClient || fail "a program using $sftp_tag does not build"
-	echo "$version and $sftp_tag are released at ${lib_commit:0:7}: the proxy serves both, and programs using each build."
+	echo "$version and $sftp_tag are released at ${lib_commit:0:7}: both have GitHub releases, the proxy serves both, and programs using each build."
 }
 
 case "$step" in

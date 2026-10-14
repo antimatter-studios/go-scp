@@ -1,0 +1,70 @@
+name: Release
+
+# A pushed version tag becomes a GitHub release whose notes are that version's
+# CHANGELOG.md section, written by github-guard's changelog-notes action: the same
+# extraction its pre-push guard checks the tag with, so the changelog that gates
+# the tag and the notes that publish it cannot disagree.
+#
+# The SFTP module's tags, pkg/sftp/vX.Y.Z, are released alongside a library
+# version on the same commit. Their release carries that version's notes, says
+# which version it is, and is never marked latest.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "pkg/sftp/v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The library version whose changelog section the release carries: the tag
+      # itself, or the version pkg/sftp requires at an SFTP module tag.
+      - name: Version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+          pkg/sftp/v*)
+            library=$(awk '$1 == "github.com/antimatter-studios/go-scp" && $2 != "=>" { print $2 }' pkg/sftp/go.mod)
+            [ -n "$library" ] || { echo "::error::pkg/sftp/go.mod requires no library version"; exit 1; }
+            echo "library=$library" >>"$GITHUB_OUTPUT"
+            echo "title=pkg/sftp ${TAG#pkg/sftp/}" >>"$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "library=$TAG" >>"$GITHUB_OUTPUT"
+            echo "title=$TAG" >>"$GITHUB_OUTPUT"
+            ;;
+          esac
+      - name: Notes
+        id: notes
+        uses: antimatter-studios/agent-skills/.github/actions/changelog-notes@a1f622dec2e5a421419966111fa0fd8568112b4b
+        with:
+          tag: ${{ steps.version.outputs.library }}
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          LIBRARY: ${{ steps.version.outputs.library }}
+          TITLE: ${{ steps.version.outputs.title }}
+          NOTES: ${{ steps.notes.outputs.file }}
+        run: |
+          set -euo pipefail
+          if [ "$TAG" = "$LIBRARY" ]; then
+            # GitHub marks the highest version latest.
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TITLE" --notes-file "$NOTES"
+            exit 0
+          fi
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$LIBRARY"
+          {
+            printf 'The SFTP module, released alongside [%s](%s), which it requires. Both are tagged on the same commit, so its changes are that release'"'"'s:\n\n' "$LIBRARY" "$url"
+            cat "$NOTES"
+          } >"$RUNNER_TEMP/sftp-notes.md"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false --title "$TITLE" --notes-file "$RUNNER_TEMP/sftp-notes.md"
