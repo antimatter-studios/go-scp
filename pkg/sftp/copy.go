@@ -70,7 +70,7 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 			if intoDir {
 				remote = path.Join(target, filepath.Base(src))
 			}
-			cp.put(&inFlight, src, remote, filepath.Base(src), &failures[i])
+			cp.put(&inFlight, src, remote, filepath.Base(src), nil, &failures[i])
 		}
 		inFlight.Wait()
 		return errors.Join(failures...)
@@ -78,15 +78,18 @@ func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) e
 }
 
 // put copies one local file or directory to remote, and sets *failure to its
-// failure; name is its path in the copy, as Progress is told it. A file may still
-// be on its way when put returns, counted in inFlight.
-func (cp *copying) put(inFlight *sync.WaitGroup, local, remote, name string, failure *error) {
+// failure; name is its path in the copy, as Progress is told it, and above the
+// directories it was reached through, outermost first. A file may still be on its
+// way when put returns, counted in inFlight.
+func (cp *copying) put(inFlight *sync.WaitGroup, local, remote, name string, above []fs.FileInfo, failure *error) {
 	info, err := os.Stat(local)
 	switch {
 	case err != nil:
 		*failure = skipped(name, fmt.Errorf("sftp: %w", err))
+	case info.IsDir() && cp.Recursive && insideItself(info, above):
+		*failure = skipped(name, fmt.Errorf("sftp: %s: a link back to a directory it is inside; not followed", local))
 	case info.IsDir() && cp.Recursive:
-		*failure = cp.putDir(local, remote, name, info)
+		*failure = cp.putDir(local, remote, name, append(above, info))
 	case info.Mode().IsRegular():
 		cp.file(inFlight, func() {
 			if err := cp.putFile(local, remote, name, info); err != nil {
@@ -115,7 +118,10 @@ func (cp *copying) putFile(local, remote, name string, info fs.FileInfo) error {
 	return w.writeFile(remote, h, cp.progress.Track(name, offset, h.Size, cp.pace.reader(in)), offset)
 }
 
-func (cp *copying) putDir(local, remote, name string, info fs.FileInfo) error {
+// putDir copies the local directory at local, the last of above, with everything in
+// it.
+func (cp *copying) putDir(local, remote, name string, above []fs.FileInfo) error {
+	info := above[len(above)-1]
 	entries, err := os.ReadDir(local)
 	if err != nil {
 		return skipped(name, fmt.Errorf("sftp: %w", err))
@@ -129,7 +135,7 @@ func (cp *copying) putDir(local, remote, name string, info fs.FileInfo) error {
 	failures := make([]error, len(entries)+1)
 	var inFlight sync.WaitGroup
 	for i, e := range entries {
-		cp.put(&inFlight, filepath.Join(local, e.Name()), path.Join(remote, e.Name()), path.Join(name, e.Name()), &failures[i])
+		cp.put(&inFlight, filepath.Join(local, e.Name()), path.Join(remote, e.Name()), path.Join(name, e.Name()), above, &failures[i])
 	}
 	// Its mode and times go on once everything in it is written.
 	inFlight.Wait()
@@ -137,6 +143,18 @@ func (cp *copying) putDir(local, remote, name string, info fs.FileInfo) error {
 		failures[len(entries)] = skipped(name, err)
 	}
 	return errors.Join(failures...)
+}
+
+// insideItself reports whether the directory dir is one of above, the directories
+// it was reached through: a link back to one of them would copy the same tree
+// inside itself again and again.
+func insideItself(dir fs.FileInfo, above []fs.FileInfo) bool {
+	for _, a := range above {
+		if os.SameFile(a, dir) {
+			return true
+		}
+	}
+	return false
 }
 
 // localHeader describes a local file or directory as the remote end writes it:
