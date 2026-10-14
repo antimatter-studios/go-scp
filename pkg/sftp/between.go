@@ -77,7 +77,7 @@ func (s *remoteSink) place(name string) string {
 }
 
 func (s *remoteSink) File(h scp.Header, body io.Reader) error {
-	return s.w.writeFile(s.place(h.Name), h, body)
+	return s.w.writeFile(s.place(h.Name), h, body, 0)
 }
 
 func (s *remoteSink) EnterDir(h scp.Header) error {

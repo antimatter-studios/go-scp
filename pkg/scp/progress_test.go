@@ -44,10 +44,15 @@ func TestProgressReportsEveryFile(t *testing.T) {
 	writeTree(t, local, tree)
 	want := sizes(tree)
 
-	for name, copyIt := range map[string]func(*Client) error{
-		"CopyTo":   func(c *Client) error { return c.CopyTo(t.Context(), remote, filepath.Join(local, "project")) },
-		"CopyFrom": func(c *Client) error { return c.CopyFrom(t.Context(), back, filepath.Join(remote, "project")) },
+	// In order: the copy back needs what the first copy sent.
+	for _, step := range []struct {
+		name   string
+		copyIt func(*Client) error
+	}{
+		{"CopyTo", func(c *Client) error { return c.CopyTo(t.Context(), remote, filepath.Join(local, "project")) }},
+		{"CopyFrom", func(c *Client) error { return c.CopyFrom(t.Context(), back, filepath.Join(remote, "project")) }},
 	} {
+		name, copyIt := step.name, step.copyIt
 		t.Run(name, func(t *testing.T) {
 			log := newProgressLog()
 			c.Progress = log.record

@@ -56,6 +56,12 @@ type Client struct {
 	// MaxSize, when positive, refuses a remote file larger than it: CopyFrom
 	// reports it as that source's failure, writes none of it, and carries on.
 	MaxSize int64
+
+	// Resume continues a file that a copy left part-way, as sftp's reget and
+	// reput do: where the destination already holds the start of a file, CopyTo
+	// and CopyFrom copy only the rest. A destination longer than its source is
+	// that file's failure. Nothing checks that the part already there matches.
+	Resume bool
 }
 
 // ErrUnavailable is returned, wrapped, when an SFTP session cannot be started: the

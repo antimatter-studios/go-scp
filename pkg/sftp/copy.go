@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -89,7 +90,15 @@ func (cp *copying) putFile(local, remote string, info fs.FileInfo) error {
 		return fmt.Errorf("sftp: %w", err)
 	}
 	defer in.Close()
-	return cp.remote().writeFile(remote, localHeader(info), cp.pace.reader(in))
+	w, h := cp.remote(), localHeader(info)
+	offset, err := w.resumeFrom(remote, h)
+	if err == nil {
+		_, err = in.Seek(offset, io.SeekStart)
+	}
+	if err != nil {
+		return err
+	}
+	return w.writeFile(remote, h, cp.pace.reader(in), offset)
 }
 
 func (cp *copying) putDir(local, remote string, info fs.FileInfo) error {
@@ -122,7 +131,7 @@ func localHeader(info fs.FileInfo) scp.Header {
 
 // remote is the copy's session as the receiving end of the copy.
 func (cp *copying) remote() remoteWriter {
-	return remoteWriter{conn: cp.conn, preserve: cp.Preserve}
+	return remoteWriter{conn: cp.conn, preserve: cp.Preserve, resume: cp.Resume}
 }
 
 // CopyFrom copies files from the remote host into target on this host, as
@@ -142,7 +151,7 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 			return fmt.Errorf("sftp: %s: must be an existing directory to take several files", target)
 		}
 	}
-	sink, err := scp.NewDirSink(target, scp.DirSinkOptions{Preserve: c.Preserve})
+	sink, err := scp.NewDirSink(target, scp.DirSinkOptions{Preserve: c.Preserve, Resume: c.Resume})
 	if err != nil {
 		return err
 	}
@@ -215,14 +224,19 @@ func (cp *copying) fetch(remote string) (failure, err error) {
 		if cp.MaxSize > 0 && h.Size > cp.MaxSize {
 			return fmt.Errorf("sftp: %s is %d bytes, more than the %d this client accepts", remote, h.Size, cp.MaxSize), nil
 		}
+		offset, err := cp.resumeFrom(h)
+		if err != nil {
+			return fmt.Errorf("sftp: %s: %w", remote, err), nil
+		}
 		file, err := cp.conn.Open(remote)
 		if err != nil {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
 		defer file.Close()
-		// Read ahead by every request a file may have in flight, so they go out
-		// together rather than one per round trip.
-		body := bufio.NewReaderSize(cp.pace.reader(file), cp.readAhead())
+		// From offset on, read ahead by every request a file may have in flight,
+		// so they go out together rather than one per round trip.
+		rest := io.NewSectionReader(file, offset, h.Size-offset)
+		body := bufio.NewReaderSize(cp.pace.reader(rest), cp.readAhead())
 		if err := cp.sink.File(h, body); err != nil {
 			return fmt.Errorf("sftp: %s: %w", remote, err), nil
 		}
@@ -268,6 +282,18 @@ const (
 	defaultRequests = 64
 	defaultPacket   = 32 * 1024
 )
+
+// resumeFrom is where the sink continues the file h describes: what it already
+// holds when Resume is set and it can say, and 0 otherwise.
+func (cp *copying) resumeFrom(h scp.Header) (int64, error) {
+	resumer, ok := cp.sink.(interface {
+		ResumeFrom(scp.Header) (int64, error)
+	})
+	if !cp.Resume || !ok {
+		return 0, nil
+	}
+	return resumer.ResumeFrom(h)
+}
 
 // readAhead is how much of a remote file to ask for at once: a full packet for
 // every request a file may have in flight, which github.com/pkg/sftp then sends
