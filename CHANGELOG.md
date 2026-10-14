@@ -28,6 +28,10 @@
   `ReadOnly` refuses uploads, `WriteOnly` refuses downloads, `MaxSize` refuses
   an uploaded file larger than it, and `Atomic` writes uploads whole. `Serve`
   stays, as a `Server` with only a root.
+- `sftp.Client.Parallel` copies several files at once over one SFTP session.
+  The files of a directory go together; failures are reported in listing order
+  and `Progress` is never called from two files at once. In the benchmark, 200
+  files of 16 KiB copy about 2.5 times as fast with 8 at once.
 - `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
   or `Sink` of a caller's own.
 

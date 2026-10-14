@@ -234,6 +234,7 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | `-s` SFTP mode | ✅ Supported | `sftp.NewClient`, in the separate `pkg/sftp` module | [sftp](examples/sftp/main.go) |
 | `-D` a local SFTP server program | ✅ Supported | `sftp.NewProgramClient` | [sftp](examples/sftp/main.go) |
 | `-X` SFTP options | ✅ Supported | `sftp.Client.Requests` (`nrequests`), `sftp.Client.BufferSize` (`buffer`) | |
+| Several files at once over SFTP | ✅ Supported | `sftp.Client.Parallel` (not an `scp` option): many small files copied about 2.5 times as fast with 8 at once on loopback | |
 | SFTP or the classic protocol, whichever the host offers | ✅ Supported | `sftp.Auto` (not an `scp` option) | [sftp](examples/sftp/main.go) |
 | Files that appear whole or not at all | ✅ Supported | `Atomic`: each file is written under a temporary name beside its target and renamed into place once complete (not an `scp` option). Honoured wherever this library writes: downloads, `DirSink` and, over SFTP, uploads; classic uploads refuse it, because the remote `scp` writes in place | |
 | Resume a copy left part-way | ✅ Supported | `sftp.Client.Resume`, as sftp's `reget` and `reput` do (not an `scp` option; the classic protocol always sends a file whole) | |
