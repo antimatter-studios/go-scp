@@ -183,13 +183,16 @@ func (c *Client) run(ctx context.Context, command string, exchange func(*bufio.R
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
+		// What the remote wrote explains what stopped the exchange, not the files
+		// it skipped on the way.
+		files, rest := Failures(err)
 		var remote *RemoteError
-		if !errors.As(err, &remote) {
+		if rest != nil && !errors.As(rest, &remote) {
 			if msg := strings.TrimSpace(p.stderr.String()); msg != "" {
-				err = fmt.Errorf("%w (remote: %s)", err, msg)
+				rest = fmt.Errorf("%w (remote: %s)", rest, msg)
 			}
 		}
-		return err
+		return joinFailures(files, rest)
 	}
 
 	// End of input, so the remote scp finishes and exits. It may have done so

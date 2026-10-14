@@ -11,6 +11,11 @@
 - `sftp.Client` honours `Progress` in `CopyTo`, `CopyFrom` and `CopyBetween`,
   naming each file by its path in the copy as package scp does. A resumed file
   starts from the bytes already there.
+- Every file or directory a copy skips is an `*scp.FileError` with its path in
+  the copy, over either protocol, and `scp.Failures` splits a copy's error into
+  those and what is left, which is nil when the copy went to the end. Messages
+  are unchanged. A copy between hosts that skipped files no longer adds both
+  ends' exit status 1 to its error.
 - `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
   or `Sink` of a caller's own.
 
