@@ -167,6 +167,21 @@ yourself, use `ParseCommand`, `Command.Relative`, `NewDirSinkIn` with
 `NewDirSink` takes a path as given, symlinks and all, so keep it for paths you
 chose yourself, never ones a client sent.
 
+To say what a client may do as well as where, serve with a `Server`:
+
+```go
+share := &scp.Server{Root: root, ReadOnly: true} // clients may only fetch files
+inbox := &scp.Server{Root: root, WriteOnly: true, MaxSize: 100 << 20, Atomic: true}
+
+status := inbox.Serve(command, channel, channel.Stderr())
+```
+
+`ReadOnly` refuses uploads and `WriteOnly` downloads, each telling the client why
+before anything moves. `MaxSize` refuses an uploaded file that declares more
+bytes; the client skips it and carries on. `Atomic` writes each upload under a
+temporary name and renames it into place once whole, so a program watching the
+directory never picks up half a file.
+
 When the function given to `Receive` returns an error, the peer is told the
 transfer failed, so a sender that discards its copy on success keeps it. Return a
 `*scp.Rejection` to choose the message the peer sees.
@@ -200,6 +215,7 @@ installed; `pkg/sftp` is SFTP, tested against OpenSSH's `sftp-server`.
 | Copy one file from a remote host | ✅ Supported | `Client.Download`, `Client.ReadFile` | [download](examples/download/main.go) |
 | Serve `scp -t` (receive) | ✅ Supported | `Receive`, `ReceiveAll`, `DirSink` | [server](examples/server/main.go) |
 | Serve `scp -f` (send) | ✅ Supported | `Send`, `SendFS`, `SendFailure` | [server](examples/server/main.go) |
+| Limit what a served client may do | ✅ Supported | `Server.ReadOnly`, `Server.WriteOnly`, `Server.MaxSize` (not `scp` options) | |
 | Paths with spaces, quotes or shell characters | ✅ Supported | quoted as one word for the remote shell | |
 | Remote errors in the remote's own words | ✅ Supported | `*RemoteError` | |
 | Size limit on downloads and received files | ✅ Supported | `Client.MaxSize`, `Receive`'s `maxSize`, `sftp.Client.MaxSize` (not an `scp` option) | |

@@ -24,6 +24,10 @@
   posix-rename@openssh.com; the classic protocol's uploads, copies between
   hosts and `CopyOnHost` refuse to run with it, since the remote `scp` writes in
   place.
+- `scp.Server` serves scp commands under a root, as `Serve` does, with limits:
+  `ReadOnly` refuses uploads, `WriteOnly` refuses downloads, `MaxSize` refuses
+  an uploaded file larger than it, and `Atomic` writes uploads whole. `Serve`
+  stays, as a `Server` with only a root.
 - `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
   or `Sink` of a caller's own.
 
