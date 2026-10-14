@@ -36,6 +36,9 @@
   directory reached through a link back to one it is inside, and reports it as
   that entry's failure, where it used to send the same tree inside itself until
   the system refused the path. Links that do not loop are still followed.
+- Examples for `Client.CopyTo`, `Client.CopyFrom`, `Server` and `Failures`, and
+  for `sftp.Client.CopyTo` and `sftp.Auto`, show on pkg.go.dev; the one for
+  `Failures` runs, with its output checked.
 - `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
   or `Sink` of a caller's own.
 
