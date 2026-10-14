@@ -20,14 +20,22 @@ type rw struct {
 // new directory, and returns a client for it and the directory.
 func servingRoot(t *testing.T) (*Client, string) {
 	t.Helper()
+	return serving(t, Server{})
+}
+
+// serving starts a test server that answers every command with s, serving a new
+// directory as its Root, and returns a client for it and the directory.
+func serving(t *testing.T, s Server) (*Client, string) {
+	t.Helper()
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { root.Close() })
+	s.Root = root
 	c := newTestServer(t, func(cmd string, stdin io.Reader, stdout, stderr io.Writer) int {
-		return Serve(cmd, rw{stdin, stdout}, stderr, root)
+		return s.Serve(cmd, rw{stdin, stdout}, stderr)
 	}).dial(t)
 	return c, dir
 }
