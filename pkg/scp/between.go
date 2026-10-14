@@ -21,7 +21,8 @@ import (
 // target must be an existing directory on the second host.
 //
 // A file either side cannot handle is reported and skipped, and the copy carries
-// on; the error lists every such failure in the words of the side that had it.
+// on; the error lists every such failure in the words of the side that had it,
+// each a FileError that Failures finds.
 func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client, target string) error {
 	if len(sources) == 0 {
 		return errors.New("scp: no sources to copy")
@@ -109,6 +110,12 @@ func finish(ctx context.Context, copyErr error, fetch, store *proc) error {
 	}
 	if copyErr == nil && fetchErr == nil && storeErr == nil {
 		return nil
+	}
+	// An scp that skipped files exits with status 1, and its stderr repeats them:
+	// when they are the copy's only failures, the ends add nothing to them.
+	files, rest := Failures(copyErr)
+	if len(files) > 0 && rest == nil && failedFiles(fetchErr) && failedFiles(storeErr) {
+		return copyErr
 	}
 	return errors.Join(copyErr, fetch.failure("fetch", fetchErr), store.failure("store", storeErr))
 }

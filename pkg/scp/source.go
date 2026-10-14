@@ -29,7 +29,8 @@ type SendOptions struct {
 //
 // An entry that cannot be sent, because it is missing, unreadable or refused by
 // the peer, is reported to the peer and skipped; SendFS goes on and returns all
-// such failures joined. A broken protocol ends the transfer at once.
+// such failures joined, each a FileError that Failures finds. A broken protocol
+// ends the transfer at once.
 func SendFS(in io.Reader, out io.Writer, fsys fs.FS, names []string, opts SendOptions) error {
 	sources := make([]source, len(names))
 	for i, name := range names {
@@ -110,7 +111,7 @@ func report(out io.Writer, name string, cause error) (failure, err error) {
 	if err := writeFailure(out, "scp: "+name+": "+describe(cause)); err != nil {
 		return nil, err
 	}
-	return fmt.Errorf("scp: %s: %w", name, cause), nil
+	return skipped(name, fmt.Errorf("scp: %s: %w", name, cause)), nil
 }
 
 // describe words an error the way the C library does, which is what scp prints and
@@ -145,11 +146,11 @@ func receiverRefused(err error) bool {
 	return errors.As(err, &remote) && !remote.Fatal
 }
 
-// entryAnswer sorts the receiver's answer to one entry: a refusal of just that
+// entryAnswer sorts the receiver's answer to the entry name: a refusal of just that
 // entry is the entry's failure, which the transfer survives; anything else ends it.
-func entryAnswer(err error) (failure, fatal error) {
+func entryAnswer(name string, err error) (failure, fatal error) {
 	if receiverRefused(err) {
-		return err, nil
+		return skipped(name, err), nil
 	}
 	return nil, err
 }
@@ -181,14 +182,14 @@ type sender struct {
 func (s sender) file(h Header, body io.Reader, label string) (failure, err error) {
 	body = s.progress.Track(label, 0, h.Size, body)
 	if err := sendTimes(s.r, s.out, h); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(label, err)
 	}
 	if _, err := io.WriteString(s.out, h.String()+"\n"); err != nil {
 		return nil, err
 	}
 	// The receiver accepts the header, or turns the file down and expects no body.
 	if err := readStatus(s.r); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(label, err)
 	}
 
 	n, copyErr := io.CopyN(s.out, body, h.Size)
@@ -213,7 +214,10 @@ func (s sender) file(h Header, body io.Reader, label string) (failure, err error
 			failure = err
 		}
 	}
-	return failure, nil
+	if failure != nil {
+		return skipped(label, failure), nil
+	}
+	return nil, nil
 }
 
 // dir sends the directory name in fsys with everything in it.
@@ -224,13 +228,13 @@ func (s sending) dir(fsys fs.FS, name string, h Header) (failure, err error) {
 	}
 
 	if err := sendTimes(s.r, s.out, h); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(name, err)
 	}
 	if _, err := fmt.Fprintf(s.out, "D%04o 0 %s\n", h.Mode.Perm(), h.Name); err != nil {
 		return nil, err
 	}
 	if err := readStatus(s.r); err != nil {
-		return entryAnswer(err)
+		return entryAnswer(name, err)
 	}
 
 	var failures []error

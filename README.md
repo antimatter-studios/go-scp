@@ -76,6 +76,24 @@ A failure the remote `scp` reports comes back as a `*scp.RemoteError` with its o
 message, for example `scp: /etc/nope: No such file or directory`. When `scp`
 cannot start at all, whatever the remote wrote to stderr is added to the error.
 
+A copy of several files goes on past one it cannot copy. `scp.Failures` splits
+its error into the files it skipped, each an `*scp.FileError` with the file's
+path in the copy, and what is left, which is nil when the copy went to the end:
+
+```go
+files, rest := scp.Failures(err)
+for _, f := range files {
+	log.Printf("skipped %s: %v", f.Path, f.Err)
+}
+if rest != nil {
+	return rest // the copy stopped part-way
+}
+```
+
+The path is empty when only the remote's message names the file, as when the
+classic protocol's remote `scp` cannot read a source; over SFTP every skipped
+file is named.
+
 Cancelling `ctx` closes the session and the transfer returns the context's error.
 
 `Client.MaxSize` refuses a download that declares more bytes, before any of it is

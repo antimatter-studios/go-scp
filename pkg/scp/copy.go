@@ -18,7 +18,8 @@ import (
 // an existing remote directory.
 //
 // A source that cannot be sent, or that the remote refuses, is skipped; the rest
-// are copied and the error lists every failure.
+// are copied and the error lists every failure, each a FileError that Failures
+// finds.
 func (c *Client) CopyTo(ctx context.Context, target string, sources ...string) error {
 	if len(sources) == 0 {
 		return errors.New("scp: no sources to copy")

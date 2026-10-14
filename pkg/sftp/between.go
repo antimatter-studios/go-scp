@@ -24,7 +24,8 @@ import (
 // does locally.
 //
 // A file either side cannot handle is reported and skipped, and the copy carries
-// on; the error lists every such failure.
+// on; the error lists every such failure, each an scp.FileError that scp.Failures
+// finds.
 func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client, target string) error {
 	if len(sources) == 0 {
 		return errors.New("sftp: no sources to copy")
