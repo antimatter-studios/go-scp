@@ -16,6 +16,14 @@
   those and what is left, which is nil when the copy went to the end. Messages
   are unchanged. A copy between hosts that skipped files no longer adds both
   ends' exit status 1 to its error.
+- `Atomic`, in `scp.Options` and `DirSinkOptions`, has every file a copy
+  writes appear whole or not at all: it is written under a temporary name
+  beside its target, starting with a dot, and renamed into place once complete;
+  a file that fails is removed. With `Resume` the part written is kept as
+  `.<name>.partial` and continued. SFTP honours it both ways, renaming with
+  posix-rename@openssh.com; the classic protocol's uploads, copies between
+  hosts and `CopyOnHost` refuse to run with it, since the remote `scp` writes in
+  place.
 - `Progress.Track` wraps a reader so it reports to a `Progress`, for a transfer
   or `Sink` of a caller's own.
 

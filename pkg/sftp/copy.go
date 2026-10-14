@@ -37,7 +37,9 @@ func (c *Client) copying(conn *pkgsftp.Client, sink scp.Sink) *copying {
 //
 // A new file takes the source's mode, less 022 as a server would take its umask
 // off, before any of it is written; an existing file keeps its own. With Preserve
-// both take the source's mode and modification time exactly.
+// both take the source's mode and modification time exactly. With Atomic every
+// file is written as a new one beside its target and renamed over it once whole,
+// which needs the server's posix-rename@openssh.com extension.
 //
 // A source that cannot be copied is skipped; the rest are copied and the error
 // lists every failure, each an scp.FileError that scp.Failures finds.
@@ -135,7 +137,7 @@ func localHeader(info fs.FileInfo) scp.Header {
 
 // remote is the copy's session as the receiving end of the copy.
 func (cp *copying) remote() remoteWriter {
-	return remoteWriter{conn: cp.conn, preserve: cp.Preserve, resume: cp.Resume}
+	return remoteWriter{conn: cp.conn, preserve: cp.Preserve, resume: cp.Resume, atomic: cp.Atomic}
 }
 
 // CopyFrom copies files from the remote host into target on this host, as
@@ -156,7 +158,7 @@ func (c *Client) CopyFrom(ctx context.Context, target string, sources ...string)
 			return fmt.Errorf("sftp: %s: must be an existing directory to take several files", target)
 		}
 	}
-	sink, err := scp.NewDirSink(target, scp.DirSinkOptions{Preserve: c.Preserve, Resume: c.Resume})
+	sink, err := scp.NewDirSink(target, scp.DirSinkOptions{Preserve: c.Preserve, Resume: c.Resume, Atomic: c.Atomic})
 	if err != nil {
 		return err
 	}

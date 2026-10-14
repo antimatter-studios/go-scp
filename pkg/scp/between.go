@@ -17,8 +17,9 @@ import (
 // src's settings decide the transfer: Recursive copies directories, Preserve keeps
 // times and modes, Glob leaves wildcards in the sources for its shell, MaxSize
 // refuses a file that declares more bytes, Limit paces the copy, and the same name
-// check as CopyFrom applies unless AnyNames is set. With more than one source,
-// target must be an existing directory on the second host.
+// check as CopyFrom applies unless AnyNames is set. With Atomic it refuses to run,
+// since the second host's scp writes in place. With more than one source, target
+// must be an existing directory on the second host.
 //
 // A file either side cannot handle is reported and skipped, and the copy carries
 // on; the error lists every such failure in the words of the side that had it,
@@ -26,6 +27,9 @@ import (
 func CopyBetween(ctx context.Context, src *Client, sources []string, dst *Client, target string) error {
 	if len(sources) == 0 {
 		return errors.New("scp: no sources to copy")
+	}
+	if src.Atomic {
+		return errWritesInPlace
 	}
 	if err := ctx.Err(); err != nil {
 		return err

@@ -26,4 +26,12 @@ type Options struct {
 	// Progress, when set, is told how each file of every copy moves: as it starts
 	// and as its bytes go, with its path in the copy and its size.
 	Progress Progress
+
+	// Atomic has every file a copy writes appear whole or not at all, as
+	// DirSinkOptions.Atomic describes: it is written under a temporary name
+	// beside its target and renamed into place once complete. The classic
+	// protocol's remote scp writes in place and cannot do otherwise, so a copy
+	// over it that the remote end writes refuses to run with Atomic set; over
+	// SFTP both directions honour it.
+	Atomic bool
 }

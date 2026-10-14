@@ -1,6 +1,8 @@
 package scp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +24,16 @@ type DirSinkOptions struct {
 	// reports. The classic protocol always sends a file whole, so this is for a
 	// sender that can start part-way, such as an SFTP download.
 	Resume bool
+
+	// Atomic writes each file under a temporary name beside it, starting with a
+	// dot, and renames it into place only once it is whole, so nothing reading
+	// the target sees part of a file. A file that fails is removed, and whatever
+	// was at its name is left as it was. An existing file is replaced, not
+	// written over: it takes the new file's mode and the writing user as owner,
+	// and a symlink at its name is replaced rather than followed. With Resume,
+	// the part written is kept as .<name>.partial, and that is what the next copy
+	// continues.
+	Atomic bool
 }
 
 // DirSink is a Sink that writes to the local filesystem under one target, as
@@ -143,6 +155,7 @@ func (s *DirSink) placeOf(name string, take bool) (place, error) {
 // File writes one file the way scp does: in place over an existing file, then cut
 // to the new length, so an existing file keeps its owner. It writes at most h.Size
 // bytes, and a body that ends sooner fails the file, which keeps only what arrived.
+// With Atomic it writes the file beside its place and renames it there instead.
 func (s *DirSink) File(h Header, body io.Reader) error {
 	if h.Size < 0 {
 		return fmt.Errorf("scp: %s: negative size %d", h.Name, h.Size)
@@ -151,7 +164,16 @@ func (s *DirSink) File(h Header, body io.Reader) error {
 	if err != nil {
 		return err
 	}
+	if s.opts.Atomic {
+		return s.replace(at, h, body)
+	}
+	return s.write(at, h, body)
+}
+
+// write writes the file h describes at at, in place; see File.
+func (s *DirSink) write(at place, h Header, body io.Reader) error {
 	var offset int64
+	var err error
 	if s.opts.Resume {
 		if offset, err = existingSize(at, h); err != nil {
 			return err
@@ -186,13 +208,45 @@ func (s *DirSink) File(h Header, body io.Reader) error {
 	return err
 }
 
+// replace writes the file h describes under a temporary name beside at, and
+// renames it to at once it is whole. A file that fails is removed, unless it is
+// kept for Resume to continue.
+func (s *DirSink) replace(at place, h Header, body io.Reader) error {
+	temp := at.temporary(s.opts.Resume)
+	err := s.write(temp, h, body)
+	if err == nil {
+		err = at.root.Rename(temp.name, at.name)
+	}
+	if err != nil && !s.opts.Resume {
+		at.root.Remove(temp.name)
+	}
+	return err
+}
+
+// temporary is where Atomic writes the file that goes at at until it is whole,
+// under the same path in the target, which is what failures name. For Resume the
+// name is fixed, so a later copy finds the part written; otherwise it is random,
+// so copies to the same name at once do not write into one file.
+func (at place) temporary(resume bool) place {
+	if resume {
+		return place{at.root, "." + at.name + ".partial", at.rel}
+	}
+	var random [6]byte
+	rand.Read(random[:]) // never fails
+	return place{at.root, "." + at.name + "." + hex.EncodeToString(random[:]) + ".partial", at.rel}
+}
+
 // ResumeFrom reports where File would continue the file h describes, with Resume
-// set: the size of the file already there, or 0 when there is none. A file already
-// longer than h.Size is not resumed, and is an error.
+// set: the size of the file already there, or 0 when there is none; with Atomic,
+// the part a copy that failed kept. A file already longer than h.Size is not
+// resumed, and is an error.
 func (s *DirSink) ResumeFrom(h Header) (int64, error) {
 	at, err := s.placeOf(h.Name, false)
 	if err != nil {
 		return 0, err
+	}
+	if s.opts.Atomic {
+		at = at.temporary(true)
 	}
 	return existingSize(at, h)
 }
