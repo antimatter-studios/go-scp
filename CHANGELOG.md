@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.7.0 — 2026-10-14
 
+The SFTP module is released alongside as `pkg/sftp/v0.2.0`, which needs this
+version.
+
+- Sending one file is now done in one place, so `Upload` and the copies between
+  hosts make up a short body with zeros and report the failure, as `Send` and
+  `SendFS` already did, rather than leaving the receiver waiting. `Send`'s
+  report of a short body now reads `scp: <name>: <error>`, and `Receive`'s
+  refusal over `maxSize` names the file.
 - Tested on Windows in CI. On Windows a received name holding `\` or `:` is
   refused, and the access time sent with -p comes from the file's attributes.
 - `sftp.Client.Resume` continues a file a copy left part-way, both ways, as
